@@ -9,6 +9,15 @@ use Slic3r::Geometry qw(polygon_lines polygon_remove_parallel_continuous_edges
     polygon_remove_acute_vertices polygon_segment_having_point point_in_polygon);
 use Slic3r::Geometry::Clipper qw(JT_MITER);
 
+sub new_from_wkt {
+    my $class = shift;
+    my ($wkt) = @_;
+    
+    $wkt =~ /^POLYGON\(\((.+)\)\)/;
+    my @points = map [ split /\s+/, $_ ], split /,\s*/, $1;
+    return $class->new(@points);
+}
+
 sub lines {
     my $self = shift;
     return polygon_lines($self);

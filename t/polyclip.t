@@ -2,7 +2,7 @@ use Test::More;
 use strict;
 use warnings;
 
-plan tests => 24;
+plan tests => 28;
 
 BEGIN {
     use FindBin;
@@ -65,6 +65,12 @@ is_deeply $intersection, [ [120, 120], [180, 160] ], 'internal lines are preserv
     is $expolygon->encloses_point([140, 150]), 1, 'point on hole contour is recognized';
     is $expolygon->encloses_point([140, 140]), 1, 'point on hole corner is recognized';
     {
+        my $intersections = $expolygon->clip_line(Slic3r::Line->new([110,150], [130,150]));
+        is_deeply $intersections, [
+            [ [110,150], [130,150] ],
+        ], 'line is clipped to square with hole';
+    }
+    {
         my $intersections = $expolygon->clip_line(Slic3r::Line->new([150,180], [150,150]));
         is_deeply $intersections, [
             [ [150, 180], [150, 160] ],
@@ -104,11 +110,21 @@ is_deeply $intersection, [ [120, 120], [180, 160] ], 'internal lines are preserv
     }
     {
         my $polyline = Slic3r::Polyline->new([ [50, 180], [250, 180], [250, 150], [150, 150], [150, 120], [120, 120], [120, 50] ]);
-        is_deeply [ map $_, $polyline->clip_with_expolygon($expolygon) ], [
+        my $clipped = [ $polyline->clip_with_expolygon($expolygon) ];
+        my $expected = [
             [ [100, 180], [200, 180] ],
             [ [200, 150], [160, 150] ],
             [ [150, 140], [150, 120], [120, 120], [120, 100] ],
-        ], 'polyline is clipped to square with hole';
+        ];
+        is_deeply $clipped, $expected,
+            'polyline is clipped to square with hole';
+        is_deeply [ map $_->clip_with_expolygon($expolygon), @$clipped ], $expected,
+            'polyline is clipped to square with hole again';
+    }
+    {
+        my $polygon = Slic3r::Polygon->new_from_wkt('POLYGON((137372 104999998,137372 97499999,67175839 97499999,67175839 104999998))');
+        my $polyline = Slic3r::Polyline->new_from_wkt('LINESTRING(399872 104971332,399872 97528663,2899872 97528663,2899872 104971332,5399872 104971332,5399872 97528663,7899872 97528663,7899872 104971332,10399872 104971332,10399872 97528663,12899872 97528663,12899872 104971332,15399872 104971332,15399872 97528663,17899872 97528663,17899872 104971332,20399872 104971332,20399872 97528663,22899872 97528663,22899872 104971332,25399872 104971332,25399872 97528663,27899872 97528663,27899872 104971332,30399872 104971332,30399872 97528663,32899872 97528663,32899872 104971332,35399872 104971332,35399872 97528663,37899872 97528663,37899872 104971332,40399872 104971332,40399872 97528663,42899872 97528663,42899872 104971332,45399872 104971332,45399872 97528663,47899872 97528663,47899872 104971332,50399872 104971332,50399872 97528663,52899872 97528663,52899872 104971332,55399872 104971332,55399872 97528663,57899872 97528663,57899872 104971332,60399872 104971332,60399872 97528663,62899872 97528663,62899872 104971332,65399872 104971332,65399872 97528663,67175839 97528663)');
+        ok $polyline->clip_with_polygon($polygon), 'Boost doesn\'t fail on intersection';
     }
 }
 
@@ -147,6 +163,13 @@ is_deeply $intersection, [ [120, 120], [180, 160] ], 'internal lines are preserv
         [ [152, 287], [152, 214],  ],
         [ [152, 107], [152, 35] ],
     ], 'line is clipped to square with hole';
+}
+
+#==========================================================
+
+{
+    my $expolygon = Slic3r::ExPolygon->new([ $square ]);
+    is $expolygon->bounding_box_polygon->is_counter_clockwise, 1, 'bounding box polygon is ccw';
 }
 
 #==========================================================

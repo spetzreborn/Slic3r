@@ -6,7 +6,7 @@ use warnings;
 
 use Boost::Geometry::Utils;
 use Math::Geometry::Voronoi;
-use Slic3r::Geometry qw(X Y A B point_in_polygon same_line line_length epsilon);
+use Slic3r::Geometry qw(X Y A B X1 Y1 X2 Y2 point_in_polygon same_line line_length epsilon);
 use Slic3r::Geometry::Clipper qw(union_ex JT_MITER);
 
 # the constructor accepts an array of polygons 
@@ -143,10 +143,10 @@ sub bounding_box_polygon {
     my $self = shift;
     my @bb = $self->bounding_box;
     return Slic3r::Polygon->new([
-        [ $bb[0], $bb[1] ],
-        [ $bb[2], $bb[1] ],
-        [ $bb[2], $bb[3] ],
-        [ $bb[0], $bb[3] ],
+        [ $bb[X1], $bb[Y1] ],
+        [ $bb[X2], $bb[Y1] ],
+        [ $bb[X2], $bb[Y2] ],
+        [ $bb[X1], $bb[Y2] ],
     ]);
 }
 

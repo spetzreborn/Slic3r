@@ -21,6 +21,15 @@ sub new {
     $self;
 }
 
+sub new_from_wkt {
+    my $class = shift;
+    my ($wkt) = @_;
+    
+    $wkt =~ /^LINESTRING\((.+)\)/;
+    my @points = map [ split /\s+/, $_ ], split /,\s*/, $1;
+    return $class->new(@points);
+}
+
 sub clone {
     my $self = shift;
     return (ref $self)->new(map $_->clone, @$self);
@@ -51,7 +60,7 @@ sub boost_linestring {
 
 sub wkt {
     my $self = shift;
-    return sprintf "LINESTRING((%s))", join ',', map "$_->[0] $_->[1]", @$self;
+    return sprintf "LINESTRING(%s)", join ',', map "$_->[0] $_->[1]", @$self;
 }
 
 sub merge_continuous_lines {

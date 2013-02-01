@@ -631,6 +631,14 @@ sub generate_support_material {
                 )};
             }
             push @queue, [@overhangs];
+            
+            if (0) {
+                require "Slic3r/SVG.pm";
+                Slic3r::SVG::output("support_$i.svg",
+                    polygons         => [ map @$_, @{$layers{$i}} ],
+                    red_polygons    => [ map @$_, @{$layers_interfaces{$i}} ],
+                );
+            }
         }
     }
     return if !map @$_, values %layers;
@@ -668,7 +676,7 @@ sub generate_support_material {
     
         if (0) {
             require "Slic3r/SVG.pm";
-            Slic3r::SVG::output("support_$_.svg",
+            Slic3r::SVG::output("support_pattern_$_.svg",
                 polylines        => [ map $_->polyline, map @$_, $support_patterns->[$_] ],
                 polygons         => [ map @$_, @support_material_areas ],
             ) for 0 .. $#$support_patterns;
@@ -693,7 +701,8 @@ sub generate_support_material {
                     map $_->clip_with_expolygon($expolygon),
                     map $_->clip_with_polygon($expolygon->bounding_box_polygon),
                     @{$support_patterns->[ $layer_id % @$support_patterns ]};
-            };
+            }
+                
             return @paths;
         };
         my %layer_paths             = ();
