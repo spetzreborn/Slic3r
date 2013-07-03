@@ -1,4 +1,5 @@
 %typemap{std::string};
+%typemap{std::vector<double>*};
 %typemap{std::vector<unsigned int>*};
 %typemap{SV*};
 %typemap{AV*};

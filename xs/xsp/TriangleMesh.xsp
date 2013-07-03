@@ -12,6 +12,7 @@
     void Repair();
     void WriteOBJFile(char* output_file);
     AV* ToPerl();
+    SV* Slice(std::vector<double>* z);
 };
 
 %package{Slic3r::TriangleMesh::XS};

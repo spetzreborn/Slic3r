@@ -20,4 +20,8 @@ ZTable::ZTable(std::vector<unsigned int>* ztable) :
 
 #include "TriangleMesh.hpp"
 
+#define av_store_point_xy(AV, X, Y)              \
+  av_store(AV, 0, newSVnv(X));                   \
+  av_store(AV, 1, newSVnv(Y))
+
 #endif

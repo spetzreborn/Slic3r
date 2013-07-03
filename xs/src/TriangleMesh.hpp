@@ -1,4 +1,5 @@
 #include <admesh/stl.h>
+#include <vector>
 
 extern "C" {
 #include "EXTERN.h"
@@ -17,6 +18,7 @@ class TriangleMesh
     void Repair();
     void WriteOBJFile(char* output_file);
     AV* ToPerl();
+    SV* Slice(std::vector<double>* z);
     private:
     stl_file stl;
 };
