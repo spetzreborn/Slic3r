@@ -1,12 +1,12 @@
+#ifndef slic3r_TriangleMesh_hpp_
+#define slic3r_TriangleMesh_hpp_
+
+#include <myinit.h>
 #include <admesh/stl.h>
 #include <vector>
+#include "Polygon.hpp"
 
-extern "C" {
-#include "EXTERN.h"
-#include "perl.h"
-#include "XSUB.h"
-#include "ppport.h"
-}
+namespace Slic3r {
 
 class TriangleMesh
 {
@@ -18,9 +18,10 @@ class TriangleMesh
     void Repair();
     void WriteOBJFile(char* output_file);
     AV* ToPerl();
-    SV* Slice(std::vector<double>* z);
-    private:
+    std::vector<Polygons>* Slice(std::vector<double>* z);
     stl_file stl;
 };
 
+}
 
+#endif

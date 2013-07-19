@@ -170,10 +170,10 @@ sub validate {
                 my $clearance;
                 {
                     my @points = map [ @$_[X,Y] ], map @{$_->vertices}, @{$self->objects->[$obj_idx]->meshes};
-                    my $convex_hull = Slic3r::Polygon->new(convex_hull(\@points));
-                    ($clearance) = map Slic3r::Polygon->new($_), 
-                                        Slic3r::Geometry::Clipper::offset(
-                                            [$convex_hull], scale $Slic3r::Config->extruder_clearance_radius / 2, 1, JT_ROUND);
+                    my $convex_hull = Slic3r::Polygon->new(@{convex_hull(\@points)});
+                    ($clearance) = map Slic3r::Polygon->new(@$_), 
+                                        @{Slic3r::Geometry::Clipper::offset(
+                                            [$convex_hull], scale $Slic3r::Config->extruder_clearance_radius / 2, 1, JT_ROUND)};
                 }
                 for my $copy (@{$self->objects->[$obj_idx]->copies}) {
                     my $copy_clearance = $clearance->clone;
@@ -305,8 +305,14 @@ sub _simplify_slices {
     my ($distance) = @_;
     
     foreach my $layer (map @{$_->layers}, @{$self->objects}) {
-        @$_ = map $_->simplify($distance), @$_
-            for $layer->slices, (map $_->slices, @{$layer->regions});
+        my @new = map $_->simplify($distance), map $_->clone, @{$layer->slices};
+        $layer->slices->clear;
+        $layer->slices->append(@new);
+        foreach my $layerm (@{$layer->regions}) {
+            my @new = map $_->simplify($distance), map $_->clone, @{$layerm->slices};
+            $layerm->slices->clear;
+            $layerm->slices->append(@new);
+        }
     }
 }
 
@@ -389,33 +395,17 @@ sub export_gcode {
             thread_cb => sub {
                 my $q = shift;
                 $Slic3r::Geometry::Clipper::clipper = Math::Clipper->new;
-                my $fills = {};
                 while (defined (my $obj_layer = $q->dequeue)) {
                     my ($obj_idx, $layer_id, $region_id) = @$obj_layer;
                     my $object = $self->objects->[$obj_idx];
-                    $fills->{$obj_idx} ||= {};
-                    $fills->{$obj_idx}{$layer_id} ||= {};
-                    $fills->{$obj_idx}{$layer_id}{$region_id} = [
-                        $object->fill_maker->make_fill($object->layers->[$layer_id]->regions->[$region_id]),
-                    ];
-                }
-                return $fills;
-            },
-            collect_cb => sub {
-                my $fills = shift;
-                foreach my $obj_idx (keys %$fills) {
-                    my $object = $self->objects->[$obj_idx];
-                    foreach my $layer_id (keys %{$fills->{$obj_idx}}) {
-                        my $layer = $object->layers->[$layer_id];
-                        foreach my $region_id (keys %{$fills->{$obj_idx}{$layer_id}}) {
-                            $layer->regions->[$region_id]->fills($fills->{$obj_idx}{$layer_id}{$region_id});
-                        }
-                    }
+                    my $layerm = $object->layers->[$layer_id]->regions->[$region_id];
+                    $layerm->fills->append( $object->fill_maker->make_fill($layerm) );
                 }
             },
+            collect_cb => sub {},
             no_threads_cb => sub {
                 foreach my $layerm (map @{$_->regions}, map @{$_->layers}, @{$self->objects}) {
-                    $layerm->fills([ $layerm->layer->object->fill_maker->make_fill($layerm) ]);
+                    $layerm->fills->append($layerm->layer->object->fill_maker->make_fill($layerm));
                 }
             },
         );
@@ -428,7 +418,7 @@ sub export_gcode {
     }
     
     # free memory (note that support material needs fill_surfaces)
-    $_->fill_surfaces(undef) for map @{$_->regions}, map @{$_->layers}, @{$self->objects};
+    $_->fill_surfaces->clear for map @{$_->regions}, map @{$_->layers}, @{$self->objects};
     
     # make skirt
     $status_cb->(88, "Generating skirt");
@@ -581,14 +571,14 @@ sub make_skirt {
         my @layer_points = (
             (map @$_, map @$_, map @{$_->slices}, @layers),
             (map @$_, map @{$_->thin_walls}, map @{$_->regions}, @layers),
-            (map @{$_->unpack->polyline}, map @{$_->support_fills->paths}, grep $_->support_fills, @layers),
+            (map @{$_->polyline}, map @{$_->support_fills}, grep $_->support_fills, @layers),
         );
         push @points, map move_points($_, @layer_points), @{$self->objects->[$obj_idx]->copies};
     }
     return if @points < 3;  # at least three points required for a convex hull
     
     # find out convex hull
-    my $convex_hull = convex_hull(\@points);
+    my $convex_hull = convex_hull([ map $_->arrayref, @points ]);
     
     my @extruded_length = ();  # for each extruder
     
@@ -604,15 +594,14 @@ sub make_skirt {
     my $distance = scale $Slic3r::Config->skirt_distance;
     for (my $i = $Slic3r::Config->skirts; $i > 0; $i--) {
         $distance += scale $spacing;
-        my ($loop) = Slic3r::Geometry::Clipper::offset([$convex_hull], $distance, 0.0001, JT_ROUND);
-        push @{$self->skirt}, Slic3r::ExtrusionLoop->pack(
+        my $loop = Slic3r::Geometry::Clipper::offset([$convex_hull], $distance, 0.0001, JT_ROUND)->[0];
+        push @{$self->skirt}, Slic3r::ExtrusionLoop->new(
             polygon         => Slic3r::Polygon->new(@$loop),
             role            => EXTR_ROLE_SKIRT,
             flow_spacing    => $spacing,
         );
         
         if ($Slic3r::Config->min_skirt_length > 0) {
-            bless $loop, 'Slic3r::Polygon';
             $extruded_length[$extruder_idx]     ||= 0;
             $extruders_e_per_mm[$extruder_idx]  ||= $self->extruders->[$extruder_idx]->e_per_mm($spacing, $first_layer_height);
             $extruded_length[$extruder_idx]     += unscale $loop->length * $extruders_e_per_mm[$extruder_idx];
@@ -642,7 +631,7 @@ sub make_brim {
         my @object_islands = (
             (map $_->contour, @{$layer0->slices}),
             (map { $_->isa('Slic3r::Polygon') ? $_ : $_->grow($grow_distance) } map @{$_->thin_walls}, @{$layer0->regions}),
-            (map $_->unpack->polyline->grow($grow_distance), map @{$_->support_fills->paths}, grep $_->support_fills, $layer0),
+            (map $_->polyline->grow($grow_distance), map @{$_->support_fills}, grep $_->support_fills, $layer0),
         );
         foreach my $copy (@{$self->objects->[$obj_idx]->copies}) {
             push @islands, map $_->clone->translate(@$copy), @object_islands;
@@ -652,7 +641,7 @@ sub make_brim {
     # if brim touches skirt, make it around skirt too
     # TODO: calculate actual skirt width (using each extruder's flow in multi-extruder setups)
     if ($Slic3r::Config->skirt_distance + (($Slic3r::Config->skirts - 1) * $flow->spacing) <= $Slic3r::Config->brim_width) {
-        push @islands, map $_->unpack->split_at_first_point->polyline->grow($grow_distance), @{$self->skirt};
+        push @islands, map $_->split_at_first_point->polyline->grow($grow_distance), @{$self->skirt};
     }
     
     my @loops = ();
@@ -661,11 +650,11 @@ sub make_brim {
         # JT_SQUARE ensures no vertex is outside the given offset distance
         # -0.5 because islands are not represented by their centerlines
         # TODO: we need the offset inwards/offset outwards logic to avoid overlapping extrusions
-        push @loops, offset2(\@islands, ($i - 1.5) * $flow->scaled_spacing, +1.0 * $flow->scaled_spacing, undef, JT_SQUARE);
+        push @loops, @{offset2(\@islands, ($i - 1.5) * $flow->scaled_spacing, +1.0 * $flow->scaled_spacing, undef, JT_SQUARE)};
     }
     
-    @{$self->brim} = map Slic3r::ExtrusionLoop->pack(
-        polygon         => Slic3r::Polygon->new($_),
+    @{$self->brim} = map Slic3r::ExtrusionLoop->new(
+        polygon         => Slic3r::Polygon->new(@$_),
         role            => EXTR_ROLE_SKIRT,
         flow_spacing    => $flow->spacing,
     ), reverse traverse_pt( union_pt(\@loops, PFT_EVENODD) );
@@ -711,7 +700,7 @@ sub write_gcode {
     # set up our extruder object
     my $gcodegen = Slic3r::GCode->new(
         config              => $self->config,
-        multiple_extruders  => (@{$self->extruders} > 1),
+        extruders           => $self->extruders,
         layer_count         => $self->layer_count,
     );
     print $fh "G21 ; set units to millimeters\n" if $Slic3r::Config->gcode_flavor ne 'makerware';
@@ -757,13 +746,13 @@ sub write_gcode {
         my @islands = ();
         foreach my $obj_idx (0 .. $#{$self->objects}) {
             my $convex_hull = convex_hull([
-                map @{$_->contour}, map @{$_->slices}, @{$self->objects->[$obj_idx]->layers},
+                map @{$_->contour->pp}, map @{$_->slices}, @{$self->objects->[$obj_idx]->layers},
             ]);
             # discard layers only containing thin walls (offset would fail on an empty polygon)
             if (@$convex_hull) {
-                my @island = Slic3r::ExPolygon->new($convex_hull)
-                    ->translate(scale $shift[X], scale $shift[Y])
-                    ->offset_ex(scale $distance_from_objects, 1, JT_SQUARE);
+                my $expolygon = Slic3r::ExPolygon->new($convex_hull);
+                $expolygon->translate(scale $shift[X], scale $shift[Y]);
+                my @island = @{$expolygon->offset_ex(scale $distance_from_objects, 1, JT_SQUARE)};
                 foreach my $copy (@{ $self->objects->[$obj_idx]->copies }) {
                     push @islands, map $_->clone->translate(@$copy), @island;
                 }
@@ -828,7 +817,7 @@ sub write_gcode {
         }
     } else {
         # order objects using a nearest neighbor search
-        my @obj_idx = chained_path([ map $_->copies->[0], @{$self->objects} ]);
+        my @obj_idx = chained_path([ map Slic3r::Point->new(@{$_->copies->[0]}), @{$self->objects} ]);
         
         # sort layers by Z
         my %layers = ();  # print_z => [ layer, layer, layer ]  by obj_idx

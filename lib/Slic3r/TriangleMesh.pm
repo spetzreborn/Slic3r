@@ -215,17 +215,34 @@ sub make_loops {
     }
     @lines = grep $_, @lines;
     
+    # build a map of lines by EDGE_A_ID and A_ID
+    my %by_edge_a_id = my %by_a_id = ();
+    for (0..$#lines) {
+        if (defined(my $edge_a_id = $lines[$_][I_EDGE_A_ID])) {
+            $by_edge_a_id{$edge_a_id} //= [];
+            push @{ $by_edge_a_id{$edge_a_id} }, $_;
+        }
+        if (defined(my $a_id = $lines[$_][I_A_ID])) {
+            $by_a_id{$a_id} //= [];
+            push @{ $by_a_id{$a_id} }, $_;
+        }
+    }
+    
     my (@polygons, @failed_loops) = ();
-    CYCLE: while (@lines) {
+    my %used_lines = ();
+    CYCLE: while (1) {
         # take first spare line and start a new loop
-        my @loop = (shift @lines);
+        my $first_idx = first { !exists $used_lines{$_} } 0..$#lines;
+        last if !defined $first_idx;
+        $used_lines{$first_idx} = 1;
+        my @loop = ($lines[$first_idx]);
         
         while (1) {
             # find a line starting where last one finishes
             my $line_idx;
-            $line_idx = first { defined $lines[$_][I_EDGE_A_ID] && $lines[$_][I_EDGE_A_ID] == $loop[-1][I_EDGE_B_ID] } 0..$#lines
+            $line_idx = first { !exists $used_lines{$_} } @{ $by_edge_a_id{$loop[-1][I_EDGE_B_ID]} // [] }
                 if defined $loop[-1][I_EDGE_B_ID];
-            $line_idx ||= first { defined $lines[$_][I_A_ID] && $lines[$_][I_A_ID] == $loop[-1][I_B_ID] } 0..$#lines
+            $line_idx //= first { !exists $used_lines{$_} } @{ $by_a_id{$loop[-1][I_B_ID]} // [] }
                 if defined $loop[-1][I_B_ID];
             
             if (!defined $line_idx) {
@@ -233,7 +250,7 @@ sub make_loops {
                 if ((defined $loop[0][I_EDGE_A_ID] && defined $loop[-1][I_EDGE_B_ID] && $loop[0][I_EDGE_A_ID] == $loop[-1][I_EDGE_B_ID])
                     || (defined $loop[0][I_A_ID] && defined $loop[-1][I_B_ID] && $loop[0][I_A_ID] == $loop[-1][I_B_ID])) {
                     # loop is complete!
-                    push @polygons, Slic3r::Polygon->new([ map $_->[I_A], @loop ]);
+                    push @polygons, Slic3r::Polygon->new(map $_->[I_A], @loop);
                     Slic3r::debugf "  Discovered %s polygon of %d points\n",
                         ($polygons[-1]->is_counter_clockwise ? 'ccw' : 'cw'), scalar(@{$polygons[-1]})
                         if $Slic3r::debug;
@@ -244,7 +261,8 @@ sub make_loops {
                 push @failed_loops, [@loop];
                 next CYCLE;
             }
-            push @loop, splice @lines, $line_idx, 1;
+            push @loop, $lines[$line_idx];
+            $used_lines{$line_idx} = 1;
         }
     }
     
@@ -527,12 +545,13 @@ sub horizontal_projection {
     
     my @f = ();
     foreach my $facet (@{$self->facets}) {
-        push @f, Slic3r::Polygon->new([ map [ @{$self->vertices->[$_]}[X,Y] ], @$facet ]);
+        push @f, Slic3r::Polygon->new(map [ @{$self->vertices->[$_]}[X,Y] ], @$facet);
     }
     
     my $scale_vector = Math::Clipper::integerize_coordinate_sets({ bits => 32 }, @f);
     $_->make_counter_clockwise for @f;  # do this after scaling, as winding order might change while doing that
-    my $union = union_ex([ Slic3r::Geometry::Clipper::offset(\@f, 10000) ]);
+    my $union = union_ex(Slic3r::Geometry::Clipper::offset(\@f, 10000));
+    $union = [ map $_->arrayref, @$union ];
     Math::Clipper::unscale_coordinate_sets($scale_vector, $_) for @$union;
     return $union;
 }

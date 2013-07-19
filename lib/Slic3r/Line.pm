@@ -7,15 +7,6 @@ use parent 'Slic3r::Polyline';
 
 use Slic3r::Geometry qw(A B X Y);
 
-sub new {
-    my $class = shift;
-    my $self;
-    $self = [ @_ ];
-    bless $self, $class;
-    bless $_, 'Slic3r::Point' for @$self;
-    return $self;
-}
-
 sub coincides_with {
     my $self = shift;
     my ($line) = @_;

@@ -49,11 +49,10 @@ sub BUILD {
         # so that no motion along external perimeters happens
         $self->_inner->[$i] = $self->no_internal
             ? []
-            : [ $self->islands->[$i]->offset_ex(-$self->_inner_margin) ];
+            : $self->islands->[$i]->offset_ex(-$self->_inner_margin);
         
         # offset the island outwards to make the boundaries for external movements
-        $self->_outer->[$i] = [ offset([ $self->islands->[$i]->contour], $self->_outer_margin) ];
-        bless $_, 'Slic3r::Polygon' for @{ $self->_outer->[$i] };
+        $self->_outer->[$i] = offset([ $self->islands->[$i]->contour], $self->_outer_margin);
         
         # if internal motion is enabled, build a set of utility expolygons representing
         # the outer boundaries (as contours) and the inner boundaries (as holes). whenever

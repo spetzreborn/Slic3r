@@ -32,6 +32,7 @@ use Encode::Locale;
 use Boost::Geometry::Utils 0.15;
 use Moo 0.091009;
 
+use Slic3r::XS;   # import all symbols (constants etc.) before they get parsed
 use Slic3r::Config;
 use Slic3r::ExPolygon;
 use Slic3r::Extruder;
@@ -65,7 +66,6 @@ use Slic3r::Print::Object;
 use Slic3r::Print::Region;
 use Slic3r::Surface;
 use Slic3r::TriangleMesh;
-use Slic3r::XS;
 our $build = eval "use Slic3r::Build; 1";
 
 use constant SCALING_FACTOR         => 0.000001;
@@ -86,7 +86,12 @@ sub parallelize {
         my $q = Thread::Queue->new;
         $q->enqueue(@items, (map undef, 1..$Config->threads));
         
-        my $thread_cb = sub { $params{thread_cb}->($q) };
+        my $thread_cb = sub {
+            my $result = $params{thread_cb}->($q);
+            Slic3r::thread_cleanup();
+            return $result;
+        };
+            
         @_ = ();
         foreach my $th (map threads->create($thread_cb), 1..$Config->threads) {
             $params{collect_cb}->($th->join);
@@ -94,6 +99,28 @@ sub parallelize {
     } else {
         $params{no_threads_cb}->();
     }
+}
+
+# call this at the very end of each thread (except the main one)
+# so that it does not try to free existing objects.
+# at that stage, existing objects are only those that we 
+# inherited at the thread creation (thus shared) and those 
+# that we are returning: destruction will be handled by the
+# main thread in both cases.
+sub thread_cleanup {
+    # prevent destruction of shared objects
+    no warnings 'redefine';
+    *Slic3r::ExPolygon::DESTROY             = sub {};
+    *Slic3r::ExPolygon::Collection::DESTROY = sub {};
+    *Slic3r::ExtrusionLoop::DESTROY         = sub {};
+    *Slic3r::ExtrusionPath::DESTROY         = sub {};
+    *Slic3r::ExtrusionPath::Collection::DESTROY = sub {};
+    *Slic3r::Line::DESTROY                  = sub {};
+    *Slic3r::Point::DESTROY                 = sub {};
+    *Slic3r::Polygon::DESTROY               = sub {};
+    *Slic3r::Polyline::DESTROY              = sub {};
+    *Slic3r::Surface::DESTROY               = sub {};
+    *Slic3r::Surface::Collection::DESTROY   = sub {};
 }
 
 sub encode_path {

@@ -57,10 +57,10 @@ use Slic3r::Test;
                 if ($cur_loop) {
                     $has_cw_loops = 1 if !Slic3r::Geometry::Clipper::is_counter_clockwise($cur_loop);
                     if ($self->F == $config->external_perimeter_speed*60) {
-                        my $move_dest = [ @$info{qw(new_X new_Y)} ];
+                        my $move_dest = Slic3r::Point->new_scale(@$info{qw(new_X new_Y)});
                         $external_loops{$self->Z}++;
                         $has_outwards_move = 1
-                            if !Slic3r::Polygon->new(@$cur_loop)->encloses_point($move_dest)
+                            if !Slic3r::Polygon->new_scale(@$cur_loop)->encloses_point($move_dest)
                                 ? ($external_loops{$self->Z} == 2)  # contour should include destination
                                 : ($external_loops{$self->Z} == 1); # hole should not
                     }
@@ -73,6 +73,7 @@ use Slic3r::Test;
     }
     
     {
+        $config->set('start_perimeters_at_concave_points', 1);
         my $print = Slic3r::Test::init_print('L', config => $config);
         my $loop_starts_from_convex_point = 0;
         my $cur_loop;
@@ -102,6 +103,7 @@ use Slic3r::Test;
         $config->set('fan_below_layer_time', 0);
         $config->set('slowdown_below_layer_time', 0);
         $config->set('bridge_fan_speed', 100);
+        $config->set('overhangs', 1);
         my $print = Slic3r::Test::init_print('overhang', config => $config);
         my %layer_speeds = ();  # print Z => [ speeds ]
         my $fan_speed = 0;

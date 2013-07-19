@@ -70,7 +70,7 @@ sub make_fill {
         @groups = sort { defined $a->[0]->bridge_angle ? -1 : 0 } @groups;
         
         foreach my $group (@groups) {
-            my $union = union_ex([ map $_->p, @$group ], undef, 1);
+            my $union = union_ex([ map $_->p, @$group ], 1);
             
             # subtract surfaces having a defined bridge_angle from any other
             if (@surfaces_with_bridge_angle && !defined $group->[0]->bridge_angle) {
@@ -105,28 +105,27 @@ sub make_fill {
     {
         my $collapsed = diff(
             [ map @{$_->expolygon}, @surfaces ],
-            [ offset(
-                [ offset([ map @{$_->expolygon}, @surfaces ], -$distance_between_surfaces/2) ],
+            offset(
+                offset([ map @{$_->expolygon}, @surfaces ], -$distance_between_surfaces/2),
                 +$distance_between_surfaces/2
-            ) ],
+            ),
             1,
         );
         push @surfaces, map Slic3r::Surface->new(
             expolygon       => $_,
             surface_type    => S_TYPE_INTERNALSOLID,
         ), @{intersection_ex(
-            [ offset($collapsed, $distance_between_surfaces) ],
+            offset($collapsed, $distance_between_surfaces),
             [
                 (map @{$_->expolygon}, grep $_->surface_type == S_TYPE_INTERNALVOID, @surfaces),
                 (@$collapsed),
             ],
-            undef,
             1,
         )};
     }
     
     # add spacing between surfaces
-    @surfaces = map $_->offset(-$distance_between_surfaces / 2 * &Slic3r::INFILL_OVERLAP_OVER_SPACING), @surfaces;
+    @surfaces = map @{$_->offset(-$distance_between_surfaces / 2 * &Slic3r::INFILL_OVERLAP_OVER_SPACING)}, @surfaces;
     
     my @fills = ();
     my @fills_ordering_points =  ();
@@ -157,47 +156,42 @@ sub make_fill {
             next SURFACE unless $density > 0;
         }
         
-        my @paths;
-        {
-            my $f = $self->filler($filler);
-            $f->layer_id($layerm->id);
-            @paths = $f->fill_surface(
-                $surface,
-                density         => $density,
-                flow_spacing    => $flow_spacing,
-                dont_adjust     => $is_bridge,
-            );
-        }
-        my $params = shift @paths;
+        my $f = $self->filler($filler);
+        $f->layer_id($layerm->id);
+        my ($params, @polylines) = $f->fill_surface(
+            $surface,
+            density         => $density,
+            flow_spacing    => $flow_spacing,
+            dont_adjust     => $is_bridge,
+        );
+        next unless @polylines;
         
         # ugly hack(tm) to get the right amount of flow (GCode.pm should be fixed)
         $params->{flow_spacing} = $layerm->extruders->{infill}->bridge_flow->width if $is_bridge;
         
         # save into layer
-        next unless @paths;
-        push @fills, Slic3r::ExtrusionPath::Collection->new(
-            no_sort => $params->{no_sort},
-            paths => [
-                map Slic3r::ExtrusionPath->pack(
-                    polyline => Slic3r::Polyline->new(@$_),
-                    role => ($surface->surface_type == S_TYPE_INTERNALBRIDGE
-                        ? EXTR_ROLE_INTERNALBRIDGE
-                        : $is_bridge
-                            ? EXTR_ROLE_BRIDGE
-                            : $is_solid
-                                ? ($surface->surface_type == S_TYPE_TOP ? EXTR_ROLE_TOPSOLIDFILL : EXTR_ROLE_SOLIDFILL)
-                                : EXTR_ROLE_FILL),
-                    height => $surface->thickness,
-                    flow_spacing => $params->{flow_spacing} || (warn "Warning: no flow_spacing was returned by the infill engine, please report this to the developer\n"),
-                ), @paths,
-            ],
+        push @fills, my $collection = Slic3r::ExtrusionPath::Collection->new;
+        $collection->no_sort($params->{no_sort});
+        $collection->append(
+            map Slic3r::ExtrusionPath->new(
+                polyline => Slic3r::Polyline->new(@$_),
+                role => ($surface->surface_type == S_TYPE_INTERNALBRIDGE
+                    ? EXTR_ROLE_INTERNALBRIDGE
+                    : $is_bridge
+                        ? EXTR_ROLE_BRIDGE
+                        : $is_solid
+                            ? (($surface->surface_type == S_TYPE_TOP) ? EXTR_ROLE_TOPSOLIDFILL : EXTR_ROLE_SOLIDFILL)
+                            : EXTR_ROLE_FILL),
+                height => $surface->thickness,
+                flow_spacing => $params->{flow_spacing} || (warn "Warning: no flow_spacing was returned by the infill engine, please report this to the developer\n"),
+            ), @polylines,
         );
-        push @fills_ordering_points, $paths[0][0];
+        push @fills_ordering_points, $polylines[0][0];
     }
     
     # add thin fill regions
     push @fills, @{$layerm->thin_fills};
-    push @fills_ordering_points, map $_->unpack->points->[0], @{$layerm->thin_fills};
+    push @fills_ordering_points, map $_->[0], @{$layerm->thin_fills};
     
     # organize infill paths using a nearest-neighbor search
     @fills = @fills[ chained_path(\@fills_ordering_points) ];

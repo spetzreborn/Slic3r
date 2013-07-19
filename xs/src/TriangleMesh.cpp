@@ -1,5 +1,7 @@
 #include "TriangleMesh.hpp"
 
+namespace Slic3r {
+
 TriangleMesh::TriangleMesh() {}
 TriangleMesh::~TriangleMesh() {
     stl_close(&stl);
@@ -86,6 +88,12 @@ TriangleMesh::Repair() {
     
     // normal_values
     stl_fix_normal_values(&stl);
+    
+    // always calculate the volume and reverse all normals if volume is negative
+    stl_calculate_volume(&stl);
+    
+    // neighbors
+    stl_verify_neighbors(&stl);
 }
 
 void
@@ -131,14 +139,14 @@ TriangleMesh::ToPerl() {
     return result;
 }
 
-SV*
+std::vector<Polygons>*
 TriangleMesh::Slice(std::vector<double>* z)
 {
     /*
        This method gets called with a list of Z coordinates and outputs
-       an arrayref having the same number of items as the original list.
-       Each item is an arrayref containing the polygons created by slicing
-       our mesh at the given heights.
+       a vector pointer having the same number of items as the original list.
+       Each item is a vector of polygons created by slicing our mesh at the 
+       given heights.
        
        This method should basically combine the behavior of the existing
        Perl methods defined in lib/Slic3r/TriangleMesh.pm:
@@ -159,13 +167,13 @@ TriangleMesh::Slice(std::vector<double>* z)
         FUTURE: parallelize slice_facet() and make_loops()
     */
     
-    AV* layers_av = newAV();
-    av_extend(layers_av, z->size()-1);
-    for (unsigned int i = 0; i < z->size(); i++) {
-        AV* polygons_av = newAV();
-        av_store(layers_av, i, newRV_noinc((SV*)polygons_av));
-        
-        // loop through found polygons and add them to polygons_av
-    }
-    return (SV*)newRV_noinc((SV*)layers_av);
+    std::vector<Polygons>* layers = new std::vector<Polygons>(z->size());
+    
+    // ...
+    // add a Polygon p to layer n:
+    // (*layers)[n].push_back(p);
+    
+    return layers;
+}
+
 }

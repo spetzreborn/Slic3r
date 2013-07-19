@@ -202,9 +202,12 @@ sub slice {
                 [ map $_->expolygon->holes, @upper_surfaces, @lower_surfaces, ],
             );
             
-            @{$layerm->slices} = map Slic3r::Surface->new
-                (expolygon => $_, surface_type => S_TYPE_INTERNAL),
-                @$diff;
+            $layerm->slices->clear;
+            $layerm->slices->append(
+                map Slic3r::Surface->new
+                    (expolygon => $_, surface_type => S_TYPE_INTERNAL),
+                    @$diff
+            );
         }
             
         # update layer slices after repairing the single regions
@@ -241,15 +244,15 @@ sub make_perimeters {
                 my $overlap = $perimeter_spacing;  # one perimeter
                 
                 my $diff = diff(
-                    [ offset([ map @{$_->expolygon}, @{$layerm->slices} ], -($Slic3r::Config->perimeters * $perimeter_spacing)) ],
-                    [ offset([ map @{$_->expolygon}, @{$upper_layerm->slices} ], -$overlap) ],
+                    offset([ map @{$_->expolygon}, @{$layerm->slices} ], -($Slic3r::Config->perimeters * $perimeter_spacing)),
+                    offset([ map @{$_->expolygon}, @{$upper_layerm->slices} ], -$overlap),
                 );
                 next if !@$diff;
                 # if we need more perimeters, $diff should contain a narrow region that we can collapse
                 
                 $diff = diff(
                     $diff,
-                    [ offset2($diff, -$perimeter_spacing, +$perimeter_spacing) ],
+                    offset2($diff, -$perimeter_spacing, +$perimeter_spacing),
                     1,
                 );
                 next if !@$diff;
@@ -262,8 +265,8 @@ sub make_perimeters {
                         # of our slice
                         $extra_perimeters++;
                         my $hypothetical_perimeter = diff(
-                            [ offset($slice->expolygon, -($perimeter_spacing * ($Slic3r::Config->perimeters + $extra_perimeters-1))) ],
-                            [ offset($slice->expolygon, -($perimeter_spacing * ($Slic3r::Config->perimeters + $extra_perimeters))) ],
+                            offset($slice->expolygon->arrayref, -($perimeter_spacing * ($Slic3r::Config->perimeters + $extra_perimeters-1))),
+                            offset($slice->expolygon->arrayref, -($perimeter_spacing * ($Slic3r::Config->perimeters + $extra_perimeters))),
                         );
                         last CYCLE if !@$hypothetical_perimeter;  # no extra perimeter is possible
                         
@@ -282,31 +285,11 @@ sub make_perimeters {
         thread_cb => sub {
             my $q = shift;
             $Slic3r::Geometry::Clipper::clipper = Math::Clipper->new;
-            my $result = {};
             while (defined (my $layer_id = $q->dequeue)) {
-                my $layer = $self->layers->[$layer_id];
-                $layer->make_perimeters;
-                $result->{$layer_id} ||= {};
-                foreach my $region_id (0 .. $#{$layer->regions}) {
-                    my $layerm = $layer->regions->[$region_id];
-                    $result->{$layer_id}{$region_id} = {
-                        perimeters      => $layerm->perimeters,
-                        fill_surfaces   => $layerm->fill_surfaces,
-                        thin_fills      => $layerm->thin_fills,
-                    };
-                }
-            }
-            return $result;
-        },
-        collect_cb => sub {
-            my $result = shift;
-            foreach my $layer_id (keys %$result) {
-                foreach my $region_id (keys %{$result->{$layer_id}}) {
-                    $self->layers->[$layer_id]->regions->[$region_id]->$_($result->{$layer_id}{$region_id}{$_})
-                        for qw(perimeters fill_surfaces thin_fills);
-                }
+                $self->layers->[$layer_id]->make_perimeters;
             }
         },
+        collect_cb => sub {},
         no_threads_cb => sub {
             $_->make_perimeters for @{$self->layers};
         },
@@ -350,7 +333,8 @@ sub detect_surfaces_type {
                 );
             } else {
                 # if no upper layer, all surfaces of this one are solid
-                @top = @{$layerm->slices};
+                # we clone surfaces because we're going to clear the slices collection
+                @top = map $_->clone, @{$layerm->slices};
                 $_->surface_type(S_TYPE_TOP) for @top;
             }
             
@@ -366,7 +350,8 @@ sub detect_surfaces_type {
                 );
             } else {
                 # if no lower layer, all surfaces of this one are solid
-                @bottom = @{$layerm->slices};
+                # we clone surfaces because we're going to clear the slices collection
+                @bottom = map $_->clone, @{$layerm->slices};
                 $_->surface_type(S_TYPE_BOTTOM) for @bottom;
             }
             
@@ -388,7 +373,8 @@ sub detect_surfaces_type {
             );
             
             # save surfaces to layer
-            @{$layerm->slices} = (@bottom, @top, @internal);
+            $layerm->slices->clear;
+            $layerm->slices->append(@bottom, @top, @internal);
             
             Slic3r::debugf "  layer %d has %d bottom, %d top and %d internal surfaces\n",
                 $layerm->id, scalar(@bottom), scalar(@top), scalar(@internal);
@@ -397,16 +383,16 @@ sub detect_surfaces_type {
         # clip surfaces to the fill boundaries
         foreach my $layer (@{$self->layers}) {
             my $layerm = $layer->regions->[$region_id];
-            my $fill_boundaries = [ map @$_, @{$layerm->fill_surfaces} ];
-            @{$layerm->fill_surfaces} = ();
+            my $fill_boundaries = [ map $_->clone->p, @{$layerm->fill_surfaces} ];
+            $layerm->fill_surfaces->clear;
             foreach my $surface (@{$layerm->slices}) {
                 my $intersection = intersection_ex(
                     [ $surface->p ],
                     $fill_boundaries,
                 );
-                push @{$layerm->fill_surfaces}, map Slic3r::Surface->new
+                $layerm->fill_surfaces->append(map Slic3r::Surface->new
                     (expolygon => $_, surface_type => $surface->surface_type),
-                    @$intersection;
+                    @$intersection);
             }
         }
     }
@@ -435,10 +421,12 @@ sub clip_fill_surfaces {
                     [ map @$_, @overhangs ],
                     [ map @{$_->expolygon}, grep $_->surface_type == S_TYPE_INTERNAL, @{$layerm->fill_surfaces} ],
                 )};
-            @{$layerm->fill_surfaces} = (
+            my @new_surfaces = (
                 @new_internal,
-                (grep $_->surface_type != S_TYPE_INTERNAL, @{$layerm->fill_surfaces}),
+                (map $_->clone, grep $_->surface_type != S_TYPE_INTERNAL, @{$layerm->fill_surfaces}),
             );
+            $layerm->fill_surfaces->clear;
+            $layerm->fill_surfaces->append(@new_surfaces);
         }
         
         # get this layer's overhangs
@@ -450,9 +438,9 @@ sub clip_fill_surfaces {
                 my $overhang_width = $layerm->overhang_width;
                 # we want to support any solid surface, not just tops
                 # (internal solids might have been generated)
-                push @overhangs, map $_->offset_ex($additional_margin), @{intersection_ex(
+                push @overhangs, map @{$_->offset_ex($additional_margin)}, @{intersection_ex(
                     [ map @{$_->expolygon}, grep $_->surface_type != S_TYPE_INTERNAL, @{$layerm->fill_surfaces} ],
-                    [ map @$_, map $_->offset_ex(-$overhang_width), @{$lower_layer->slices} ],
+                    [ map @$_, map @{$_->offset_ex(-$overhang_width)}, @{$lower_layer->slices} ],
                 )};
             }
         }
@@ -480,7 +468,7 @@ sub bridge_over_infill {
             
             # build the new collection of fill_surfaces
             {
-                my @new_surfaces = grep $_->surface_type != S_TYPE_INTERNALSOLID, @{$layerm->fill_surfaces};
+                my @new_surfaces = map $_->clone, grep $_->surface_type != S_TYPE_INTERNALSOLID, @{$layerm->fill_surfaces};
                 push @new_surfaces, map Slic3r::Surface->new(
                         expolygon       => $_,
                         surface_type    => S_TYPE_INTERNALBRIDGE,
@@ -493,7 +481,8 @@ sub bridge_over_infill {
                         [ map @$_, @$to_bridge ],
                         1,
                     )};
-                @{$layerm->fill_surfaces} = @new_surfaces;
+                $layerm->fill_surfaces->clear;
+                $layerm->fill_surfaces->append(@new_surfaces);
             }
             
             # exclude infill from the layers below if needed
@@ -520,7 +509,8 @@ sub bridge_over_infill {
                                 [ map @$_, @$to_bridge ],
                             )};
                         }
-                        @{$lower_layerm->fill_surfaces} = @new_surfaces;
+                        $lower_layerm->fill_surfaces->clear;
+                        $lower_layerm->fill_surfaces->append(@new_surfaces);
                     }
                     
                     $excess -= $self->layers->[$i]->height;
@@ -551,14 +541,14 @@ sub discover_horizontal_shells {
                 # and the latter contains the enlarged external surfaces
                 my $solid = [ map $_->expolygon, grep $_->surface_type == $type, @{$layerm->slices}, @{$layerm->fill_surfaces} ];
                 next if !@$solid;
-                Slic3r::debugf "Layer %d has %s surfaces\n", $i, ($type == S_TYPE_TOP ? 'top' : 'bottom');
+                Slic3r::debugf "Layer %d has %s surfaces\n", $i, ($type == S_TYPE_TOP) ? 'top' : 'bottom';
                 
                 my $solid_layers = ($type == S_TYPE_TOP)
                     ? $Slic3r::Config->top_solid_layers
                     : $Slic3r::Config->bottom_solid_layers;
-                for (my $n = $type == S_TYPE_TOP ? $i-1 : $i+1; 
+                for (my $n = ($type == S_TYPE_TOP) ? $i-1 : $i+1; 
                         abs($n - $i) <= $solid_layers-1; 
-                        $type == S_TYPE_TOP ? $n-- : $n++) {
+                        ($type == S_TYPE_TOP) ? $n-- : $n++) {
                     
                     next if $n < 0 || $n >= $self->layer_count;
                     Slic3r::debugf "  looking for neighbors on layer %d...\n", $n;
@@ -569,8 +559,8 @@ sub discover_horizontal_shells {
                     # intersections have contours and holes
                     my $new_internal_solid = intersection_ex(
                         [ map @$_, @$solid ],
-                        [ map $_->p, grep { $_->surface_type == S_TYPE_INTERNAL || $_->surface_type == S_TYPE_INTERNALSOLID } @neighbor_fill_surfaces ],
-                        undef, 1,
+                        [ map $_->p, grep { ($_->surface_type == S_TYPE_INTERNAL) || ($_->surface_type == S_TYPE_INTERNALSOLID) } @neighbor_fill_surfaces ],
+                        1,
                     );
                     next if !@$new_internal_solid;
                     
@@ -580,7 +570,7 @@ sub discover_horizontal_shells {
                         my $margin = 3 * $layerm->solid_infill_flow->scaled_width; # require at least this size
                         my $too_narrow = diff_ex(
                             [ map @$_, @$new_internal_solid ],
-                            [ offset([ offset([ map @$_, @$new_internal_solid ], -$margin) ], +$margin) ],
+                            offset(offset([ map @$_, @$new_internal_solid ], -$margin), +$margin),
                             1,
                         );
                         
@@ -594,7 +584,7 @@ sub discover_horizontal_shells {
                             
                             # make sure our grown surfaces don't exceed the fill area
                             my @grown = map @$_, @{intersection_ex(
-                                [ offset([ map @$_, @$too_narrow ], +$margin) ],
+                                offset([ map @$_, @$too_narrow ], +$margin),
                                 [ map $_->p, @fill_boundaries ],
                             )};
                             $new_internal_solid = union_ex([ @grown, (map @$_, @$new_internal_solid) ]);
@@ -620,25 +610,22 @@ sub discover_horizontal_shells {
                     
                     # assign resulting internal surfaces to layer
                     my $neighbor_fill_surfaces = $self->layers->[$n]->regions->[$region_id]->fill_surfaces;
-                    @$neighbor_fill_surfaces = ();
-                    push @$neighbor_fill_surfaces, Slic3r::Surface->new
-                        (expolygon => $_, surface_type => S_TYPE_INTERNAL)
-                        for @$internal;
+                    $neighbor_fill_surfaces->clear;
+                    $neighbor_fill_surfaces->append(map Slic3r::Surface->new
+                        (expolygon => $_, surface_type => S_TYPE_INTERNAL), @$internal);
                     
                     # assign new internal-solid surfaces to layer
-                    push @$neighbor_fill_surfaces, Slic3r::Surface->new
-                        (expolygon => $_, surface_type => S_TYPE_INTERNALSOLID)
-                        for @$internal_solid;
+                    $neighbor_fill_surfaces->append(map Slic3r::Surface->new
+                        (expolygon => $_, surface_type => S_TYPE_INTERNALSOLID), @$internal_solid);
                     
                     # assign top and bottom surfaces to layer
-                    foreach my $s (Slic3r::Surface->group(grep { $_->surface_type == S_TYPE_TOP || $_->surface_type == S_TYPE_BOTTOM } @neighbor_fill_surfaces)) {
+                    foreach my $s (Slic3r::Surface->group(grep { ($_->surface_type == S_TYPE_TOP) || ($_->surface_type == S_TYPE_BOTTOM) } @neighbor_fill_surfaces)) {
                         my $solid_surfaces = diff_ex(
                             [ map $_->p, @$s ],
                             [ map @$_, @$internal_solid, @$internal ],
                             1,
                         );
-                        push @$neighbor_fill_surfaces, $s->[0]->clone(expolygon => $_)
-                            for @$solid_surfaces;
+                        $neighbor_fill_surfaces->append(map $s->[0]->clone(expolygon => $_), @$solid_surfaces);
                     }
                 }
             }
@@ -708,7 +695,7 @@ sub combine_infill {
                 # $intersection now contains the regions that can be combined across the full amount of layers
                 # so let's remove those areas from all layers
                 
-                 my @intersection_with_clearance = map $_->offset(
+                 my @intersection_with_clearance = map @{$_->offset(
                        $layerms[-1]->solid_infill_flow->scaled_width    / 2
                      + $layerms[-1]->perimeter_flow->scaled_width / 2
                      # Because fill areas for rectilinear and honeycomb are grown 
@@ -716,12 +703,12 @@ sub combine_infill {
                      + (($type == S_TYPE_INTERNALSOLID || $Slic3r::Config->fill_pattern =~ /(rectilinear|honeycomb)/)
                        ? $layerms[-1]->solid_infill_flow->scaled_width * &Slic3r::INFILL_OVERLAP_OVER_SPACING
                        : 0)
-                     ), @$intersection;
+                     )}, @$intersection;
 
                 
                 foreach my $layerm (@layerms) {
                     my @this_type   = grep $_->surface_type == $type, @{$layerm->fill_surfaces};
-                    my @other_types = grep $_->surface_type != $type, @{$layerm->fill_surfaces};
+                    my @other_types = map $_->clone, grep $_->surface_type != $type, @{$layerm->fill_surfaces};
                     
                     my @new_this_type = map Slic3r::Surface->new(expolygon => $_, surface_type => $type),
                         @{diff_ex(
@@ -749,7 +736,8 @@ sub combine_infill {
                             )};
                     }
                     
-                    @{$layerm->fill_surfaces} = (@new_this_type, @other_types);
+                    $layerm->fill_surfaces->clear;
+                    $layerm->fill_surfaces->append(@new_this_type, @other_types);
                 }
             }
         }
@@ -787,7 +775,7 @@ sub generate_support_material {
             my $layer = $self->layers->[$i];
             my $lower_layer = $i > 0 ? $self->layers->[$i-1] : undef;
             
-            my @current_layer_offsetted_slices = map $_->offset_ex($distance_from_object), @{$layer->slices};
+            my @current_layer_offsetted_slices = map @{$_->offset_ex($distance_from_object)}, @{$layer->slices};
             
             # $upper_layers_overhangs[-1] contains the overhangs of the upper layer, regardless of any interface layers
             # $upper_layers_overhangs[0] contains the overhangs of the first upper layer above the interface layers
@@ -846,7 +834,7 @@ sub generate_support_material {
                         ? scale $lower_layer->height * ((cos $threshold_rad) / (sin $threshold_rad))
                         : $self->layers->[1]->regions->[0]->overhang_width;
                 
-                @overhangs = map $_->offset_ex(+$distance), @{diff_ex(
+                @overhangs = map @{$_->offset_ex(+$distance)}, @{diff_ex(
                     [ map @$_, @{$layer->slices} ],
                     [ map @$_, @{$lower_layer->slices} ],
                     1,
@@ -868,7 +856,7 @@ sub generate_support_material {
     my $support_interface_patterns = [];
     {
         # 0.5 ensures the paths don't get clipped externally when applying them to layers
-        my @areas = map $_->offset_ex(- 0.5 * $flow->scaled_width),
+        my @areas = map @{$_->offset_ex(- 0.5 * $flow->scaled_width)},
             @{union_ex([ map $_->contour, map @$_, values %layers, values %layers_interfaces, values %layers_contact_areas ])};
         
         my $pattern = $Slic3r::Config->support_material_pattern;
@@ -883,7 +871,7 @@ sub generate_support_material {
             my ($expolygon, $density) = @_;
             
             my @paths = $filler->fill_surface(
-                Slic3r::Surface->new(expolygon => $expolygon),
+                Slic3r::Surface->new(expolygon => $expolygon, surface_type => S_TYPE_INTERNAL),
                 density         => $density,
                 flow_spacing    => $flow->spacing,
             );
@@ -931,7 +919,6 @@ sub generate_support_material {
             my @paths = ();
             foreach my $expolygon (@$expolygons) {
                 push @paths,
-                    map $_->pack,
                     map {
                         $_->height($height);
                         
@@ -951,9 +938,6 @@ sub generate_support_material {
             };
             return @paths;
         };
-        my %layer_paths             = ();
-        my %layer_contact_paths     = ();
-        my %layer_islands           = ();
         my $process_layer = sub {
             my ($layer_id) = @_;
             my $layer = $self->layers->[$layer_id];
@@ -967,7 +951,7 @@ sub generate_support_material {
                 $filler->angle($Slic3r::Config->support_material_angle + 90);
                 foreach my $expolygon (@$islands) {
                     my @paths = $filler->fill_surface(
-                        Slic3r::Surface->new(expolygon => $expolygon),
+                        Slic3r::Surface->new(expolygon => $expolygon, surface_type => S_TYPE_INTERNAL),
                         density         => 0.5,
                         flow_spacing    => $self->print->first_layer_support_material_flow->spacing,
                     );
@@ -989,6 +973,9 @@ sub generate_support_material {
             }
             return ($paths, $contact_paths, $islands);
         };
+        my %layer_paths             = ();
+        my %layer_contact_paths     = ();
+        my %layer_islands           = ();
         Slic3r::parallelize(
             items => [ keys %layers ],
             thread_cb => sub {
@@ -1014,8 +1001,8 @@ sub generate_support_material {
             $layer->support_islands($layer_islands{$layer_id});
             $layer->support_fills(Slic3r::ExtrusionPath::Collection->new);
             $layer->support_contact_fills(Slic3r::ExtrusionPath::Collection->new);
-            push @{$layer->support_fills->paths}, @{$layer_paths{$layer_id}};
-            push @{$layer->support_contact_fills->paths}, @{$layer_contact_paths{$layer_id}};
+            $layer->support_fills->append(@{$layer_paths{$layer_id}});
+            $layer->support_contact_fills->append(@{$layer_contact_paths{$layer_id}});
         }
     }
 }

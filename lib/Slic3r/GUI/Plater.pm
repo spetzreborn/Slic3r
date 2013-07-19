@@ -161,6 +161,7 @@ sub new {
         my ($obj_idx, $thumbnail) = @{$event->GetData};
         return if !$self->{objects}[$obj_idx];  # object was deleted before thumbnail generation completed
         $self->{objects}[$obj_idx]->thumbnail($thumbnail->clone);
+        
         $self->on_thumbnail_made($obj_idx);
     });
     
@@ -317,6 +318,7 @@ sub load_file {
             input_file              => $input_file,
             input_file_object_id    => $i,
             model_object            => $model->objects->[$i],
+            mesh_stats              => $model->objects->[$i]->mesh_stats,  # so that we can free model_object
             instances               => [
                 $model->objects->[$i]->instances
                     ? (map $_->offset, @{$model->objects->[$i]->instances})
@@ -570,6 +572,7 @@ sub export_gcode {
                     });
                 },
             );
+            Slic3r::thread_cleanup();
         });
         $self->statusbar->SetCancelCallback(sub {
             $self->{export_thread}->kill('KILL')->join;
@@ -740,6 +743,7 @@ sub make_thumbnail {
         
         if ($Slic3r::have_threads) {
             Wx::PostEvent($self, Wx::PlThreadEvent->new(-1, $THUMBNAIL_DONE_EVENT, shared_clone([ $obj_idx, $thumbnail ])));
+            Slic3r::thread_cleanup();
             threads->exit;
         } else {
             $self->on_thumbnail_made($obj_idx);
@@ -866,13 +870,12 @@ sub repaint {
     @{$parent->{object_previews}} = ();
     for my $obj_idx (0 .. $#{$parent->{objects}}) {
         my $object = $parent->{objects}[$obj_idx];
-        next unless $object->thumbnail && @{$object->thumbnail->expolygons};
+        next unless defined $object->thumbnail && @{$object->thumbnail};
         for my $instance_idx (0 .. $#{$object->instances}) {
             my $instance = $object->instances->[$instance_idx];
             
-            my $thumbnail = $object->transformed_thumbnail
-                ->clone
-                ->translate(map $parent->to_pixel($instance->[$_]) + $parent->{shift}[$_], (X,Y));
+            my $thumbnail = $object->transformed_thumbnail->clone;
+            $thumbnail->translate(map $parent->to_pixel($instance->[$_]) + $parent->{shift}[$_], (X,Y));
             
             push @{$parent->{object_previews}}, [ $obj_idx, $instance_idx, $thumbnail ];
             
@@ -884,11 +887,11 @@ sub repaint {
             } else {
                 $dc->SetBrush($parent->{objects_brush});
             }
-            $dc->DrawPolygon($parent->_y($_), 0, 0) for map $_->contour, @{ $parent->{object_previews}->[-1][2]->expolygons };
+            $dc->DrawPolygon($parent->_y($_), 0, 0) for map $_->contour, @{ $parent->{object_previews}->[-1][2] };
             
             # if sequential printing is enabled and we have more than one object
             if ($parent->{config}->complete_objects && (map @{$_->instances}, @{$parent->{objects}}) > 1) {
-            	my $convex_hull = Slic3r::Polygon->new(convex_hull([ map @{$_->contour}, @{$parent->{object_previews}->[-1][2]->expolygons} ]));
+            	my $convex_hull = Slic3r::Polygon->new(@{convex_hull([ map @{$_->contour->pp}, @{$parent->{object_previews}->[-1][2]} ])});
                 my ($clearance) = @{offset([$convex_hull], $parent->{config}->extruder_clearance_radius / 2 * $parent->{scaling_factor}, 100, JT_ROUND)};
                 $dc->SetPen($parent->{clearance_pen});
                 $dc->SetBrush($parent->{transparent_brush});
@@ -899,7 +902,7 @@ sub repaint {
     
     # draw skirt
     if (@{$parent->{object_previews}} && $parent->{config}->skirts) {
-        my $convex_hull = Slic3r::Polygon->new(convex_hull([ map @{$_->contour}, map @{$_->[2]->expolygons}, @{$parent->{object_previews}} ]));
+        my $convex_hull = Slic3r::Polygon->new(@{convex_hull([ map @{$_->contour}, map @{$_->[2]}, @{$parent->{object_previews}} ])});
         ($convex_hull) = @{offset([$convex_hull], $parent->{config}->skirt_distance * $parent->{scaling_factor}, 100, JT_ROUND)};
         $dc->SetPen($parent->{skirt_pen});
         $dc->SetBrush($parent->{transparent_brush});
@@ -921,7 +924,7 @@ sub mouse_event {
         $parent->selection_changed(0);
         for my $preview (@{$parent->{object_previews}}) {
             my ($obj_idx, $instance_idx, $thumbnail) = @$preview;
-            if (first { $_->contour->encloses_point($pos) } @{$thumbnail->expolygons}) {
+            if (defined first { $_->contour->encloses_point($pos) } @$thumbnail) {
                 $parent->{selected_objects} = [ [$obj_idx, $instance_idx] ];
                 $parent->{list}->Select($obj_idx, 1);
                 $parent->selection_changed(1);
@@ -951,7 +954,7 @@ sub mouse_event {
     } elsif ($event->Moving) {
         my $cursor = wxSTANDARD_CURSOR;
         for my $preview (@{$parent->{object_previews}}) {
-            if (first { $_->contour->encloses_point($pos) } @{ $preview->[2]->expolygons }) {
+            if (defined first { $_->contour->encloses_point($pos) } @{ $preview->[2] }) {
                 $cursor = Wx::Cursor->new(wxCURSOR_HAND);
                 last;
             }
@@ -1068,6 +1071,7 @@ sub OnDropFiles {
 package Slic3r::GUI::Plater::Object;
 use Moo;
 
+use List::Util qw(first);
 use Math::ConvexHull::MonotoneChain qw();
 use Slic3r::Geometry qw(X Y Z MIN MAX deg2rad);
 
@@ -1084,6 +1088,7 @@ has 'thumbnail'             => (is => 'rw', trigger => \&_transform_thumbnail);
 has 'transformed_thumbnail' => (is => 'rw');
 has 'thumbnail_scaling_factor' => (is => 'rw', trigger => \&_transform_thumbnail);
 has 'layer_height_ranges'   => (is => 'rw', default => sub { [] }); # [ z_min, z_max, layer_height ]
+has 'mesh_stats'            => (is => 'rw');
 
 # statistics
 has 'facets'                => (is => 'rw');
@@ -1098,7 +1103,7 @@ sub _trigger_model_object {
 	    $self->bounding_box($self->model_object->bounding_box);
 	    
     	my $mesh = $self->model_object->mesh;
-        $self->convex_hull(Slic3r::Polygon->new(Math::ConvexHull::MonotoneChain::convex_hull($mesh->used_vertices)));
+        $self->convex_hull(Slic3r::Polygon->new(@{Math::ConvexHull::MonotoneChain::convex_hull($mesh->used_vertices)}));
 	    $self->facets(scalar @{$mesh->facets});
 	    $self->vertices(scalar @{$mesh->vertices});
 	    
@@ -1109,7 +1114,18 @@ sub _trigger_model_object {
 sub check_manifoldness {
 	my $self = shift;
 	
-	$self->is_manifold($self->get_model_object->check_manifoldness);
+	if ($self->mesh_stats) {
+	    if (first { $self->mesh_stats->{$_} > 0 } qw(degenerate_facets edges_fixed facets_removed facets_added facets_reversed backwards_edges)) {
+	        warn "Warning: the input file contains manifoldness errors. "
+	            . "Slic3r repaired it successfully by guessing what the correct shape should be, "
+	            . "but you might still want to inspect the G-code before printing.\n";
+	        $self->is_manifold(0);
+	    } else {
+	        $self->is_manifold(1);
+	    }
+	} else {
+    	$self->is_manifold($self->get_model_object->check_manifoldness);
+    }
 	return $self->is_manifold;
 }
 
@@ -1142,15 +1158,13 @@ sub make_thumbnail {
     
     my $mesh = $self->model_object->mesh;  # $self->model_object is already aligned to origin
     my $thumbnail = Slic3r::ExPolygon::Collection->new(
-    	expolygons => (@{$mesh->facets} <= 5000)
-    		? $mesh->horizontal_projection
-    		: [ Slic3r::ExPolygon->new($self->convex_hull) ],
+        # only simplify expolygons larger than the threshold
+        grep @$_,
+            map { ($_->area >= 1) ? $_->simplify(0.5) : $_ }
+    	    (@{$mesh->facets} <= 5000)
+    		    ? @{$mesh->horizontal_projection}
+    		    : Slic3r::ExPolygon->new($self->convex_hull)
     );
-    
-    # only simplify expolygons larger than the threshold
-    @{$thumbnail->expolygons} = grep @$_,
-        map { ($_->area >= 1) ? $_->simplify(0.5) : $_ }
-        @{$thumbnail->expolygons};
     
     $self->thumbnail($thumbnail);  # ignored in multi-threaded environments
     $self->free_model_object;
@@ -1161,7 +1175,7 @@ sub make_thumbnail {
 sub _transform_thumbnail {
     my $self = shift;
     
-    return unless $self->thumbnail;
+    return unless defined $self->thumbnail;
     my $t = $self->_apply_transform($self->thumbnail);
     $t->scale($self->thumbnail_scaling_factor);
     
@@ -1183,10 +1197,10 @@ sub _apply_transform {
     
     # the order of these transformations MUST be the same everywhere, including
     # in Slic3r::Print->add_model()
-    return $entity
-        ->clone
-        ->rotate(deg2rad($self->rotate), $self->bounding_box->center_2D)
-        ->scale($self->scale);
+    my $result = $entity->clone;
+    $result->rotate(deg2rad($self->rotate), $self->bounding_box->center_2D);
+    $result->scale($self->scale);
+    return $result;
 }
 
 sub transformed_size {

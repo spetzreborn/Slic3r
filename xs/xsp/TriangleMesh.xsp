@@ -2,6 +2,7 @@
 
 %{
 #include <myinit.h>
+#include "TriangleMesh.hpp"
 %}
 
 %name{Slic3r::TriangleMesh::XS} class TriangleMesh {
@@ -12,7 +13,49 @@
     void Repair();
     void WriteOBJFile(char* output_file);
     AV* ToPerl();
-    SV* Slice(std::vector<double>* z);
+%{
+
+SV*
+TriangleMesh::stats()
+    CODE:
+        HV* hv = newHV();
+        (void)hv_stores( hv, "number_of_facets",    newSViv(THIS->stl.stats.number_of_facets) );
+        (void)hv_stores( hv, "number_of_parts",     newSViv(THIS->stl.stats.number_of_parts) );
+        (void)hv_stores( hv, "volume",              newSVnv(THIS->stl.stats.volume) );
+        (void)hv_stores( hv, "degenerate_facets",   newSViv(THIS->stl.stats.degenerate_facets) );
+        (void)hv_stores( hv, "edges_fixed",         newSViv(THIS->stl.stats.edges_fixed) );
+        (void)hv_stores( hv, "facets_removed",      newSViv(THIS->stl.stats.facets_removed) );
+        (void)hv_stores( hv, "facets_added",        newSViv(THIS->stl.stats.facets_added) );
+        (void)hv_stores( hv, "facets_reversed",     newSViv(THIS->stl.stats.facets_reversed) );
+        (void)hv_stores( hv, "backwards_edges",     newSViv(THIS->stl.stats.backwards_edges) );
+        (void)hv_stores( hv, "normals_fixed",       newSViv(THIS->stl.stats.normals_fixed) );
+        RETVAL = (SV*)newRV_noinc((SV*)hv);
+    OUTPUT:
+        RETVAL
+
+SV*
+TriangleMesh::slice(z)
+    std::vector<double>* z
+    CODE:
+        std::vector<Polygons>* layers = THIS->Slice(z);
+        
+        AV* layers_av = newAV();
+        av_extend(layers_av, layers->size()-1);
+        for (unsigned int i = 0; i < layers->size(); i++) {
+            AV* polygons_av = newAV();
+            av_extend(polygons_av, (*layers)[i].size()-1);
+            unsigned int j = 0;
+            for (Polygons::iterator it = (*layers)[i].begin(); it != (*layers)[i].end(); ++it) {
+                av_store(polygons_av, j++, (*it).to_SV_ref());
+            }
+            av_store(layers_av, i, newRV_noinc((SV*)polygons_av));
+        }
+        delete layers;
+        RETVAL = (SV*)newRV_noinc((SV*)layers_av);
+    OUTPUT:
+        RETVAL
+
+%}
 };
 
 %package{Slic3r::TriangleMesh::XS};
