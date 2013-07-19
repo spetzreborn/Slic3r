@@ -207,7 +207,9 @@ sub make_perimeters {
         # non-collapsing regions
         # use a bogus surface_type
         $self->fill_surfaces->append(
-            map Slic3r::Surface->new(expolygon => $_, surface_type => S_TYPE_TOP), @{offset2_ex(
+            map Slic3r::Surface->new(expolygon => $_, surface_type => S_TYPE_TOP),
+            map $_->simplify(&Slic3r::SCALED_RESOLUTION),
+            @{offset2_ex(
                 [ map $_->simplify(&Slic3r::SCALED_RESOLUTION), @last ],
                 -($perimeter_spacing/2 + $infill_spacing),
                 +$infill_spacing,
