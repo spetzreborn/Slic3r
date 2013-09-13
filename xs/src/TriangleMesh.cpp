@@ -1,4 +1,7 @@
 #include "TriangleMesh.hpp"
+#include <queue>
+#include <deque>
+#include <set>
 #include <vector>
 #include <map>
 #include <utility>
@@ -8,9 +11,44 @@
 
 namespace Slic3r {
 
-TriangleMesh::TriangleMesh() {}
+TriangleMesh::TriangleMesh()
+    : repaired(false)
+{
+    stl_initialize(&this->stl);
+}
+
+TriangleMesh::TriangleMesh(const TriangleMesh &other)
+    : stl(other.stl), repaired(other.repaired)
+{
+    this->stl.heads = NULL;
+    this->stl.tail  = NULL;
+    if (other.stl.facet_start != NULL) {
+        this->stl.facet_start = new stl_facet[other.stl.stats.number_of_facets];
+        std::copy(other.stl.facet_start, other.stl.facet_start + other.stl.stats.number_of_facets, this->stl.facet_start);
+    }
+    if (other.stl.neighbors_start != NULL) {
+        this->stl.neighbors_start = new stl_neighbors[other.stl.stats.number_of_facets];
+        std::copy(other.stl.neighbors_start, other.stl.neighbors_start + other.stl.stats.number_of_facets, this->stl.neighbors_start);
+    }
+    if (other.stl.v_indices != NULL) {
+        this->stl.v_indices = new v_indices_struct[other.stl.stats.number_of_facets];
+        std::copy(other.stl.v_indices, other.stl.v_indices + other.stl.stats.number_of_facets, this->stl.v_indices);
+    }
+    if (other.stl.v_shared != NULL) {
+        this->stl.v_shared = new stl_vertex[other.stl.stats.shared_vertices];
+        std::copy(other.stl.v_shared, other.stl.v_shared + other.stl.stats.shared_vertices, this->stl.v_shared);
+    }
+}
+
 TriangleMesh::~TriangleMesh() {
-    stl_close(&stl);
+    stl_close(&this->stl);
+}
+
+SV*
+TriangleMesh::to_SV() {
+    SV* sv = newSV(0);
+    sv_setref_pv( sv, "Slic3r::TriangleMesh", (void*)this );
+    return sv;
 }
 
 void
@@ -18,9 +56,20 @@ TriangleMesh::ReadSTLFile(char* input_file) {
     stl_open(&stl, input_file);
 }
 
+void
+TriangleMesh::write_ascii(char* output_file)
+{
+    stl_write_ascii(&this->stl, output_file, "");
+}
+
+void
+TriangleMesh::write_binary(char* output_file)
+{
+    stl_write_binary(&this->stl, output_file, "");
+}
+
 void TriangleMesh::ReadFromPerl(SV* vertices, SV* facets)
 {
-    stl_initialize(&stl);
     stl.stats.type = inmemory;
     
     // count facets and allocate memory
@@ -53,8 +102,8 @@ void TriangleMesh::ReadFromPerl(SV* vertices, SV* facets)
 }
 
 void
-TriangleMesh::Repair() {
-    int i;
+TriangleMesh::repair() {
+    if (this->repaired) return;
     
     // checking exact
     stl_check_facets_exact(&stl);
@@ -68,7 +117,7 @@ TriangleMesh::Repair() {
     float increment = stl.stats.bounding_diameter / 10000.0;
     int iterations = 2;
     if (stl.stats.connected_facets_3_edge < stl.stats.number_of_facets) {
-        for (i = 0; i < iterations; i++) {
+        for (int i = 0; i < iterations; i++) {
             if (stl.stats.connected_facets_3_edge < stl.stats.number_of_facets) {
                 //printf("Checking nearby. Tolerance= %f Iteration=%d of %d...", tolerance, i + 1, iterations);
                 stl_check_facets_nearby(&stl, tolerance);
@@ -102,6 +151,8 @@ TriangleMesh::Repair() {
     
     // neighbors
     stl_verify_neighbors(&stl);
+    
+    this->repaired = true;
 }
 
 void
@@ -113,6 +164,15 @@ TriangleMesh::WriteOBJFile(char* output_file) {
 void TriangleMesh::scale(float factor)
 {
     stl_scale(&(this->stl), factor);
+}
+
+void TriangleMesh::scale(std::vector<double> versor)
+{
+    float fversor[3];
+    fversor[0] = versor[0];
+    fversor[1] = versor[1];
+    fversor[2] = versor[2];
+    stl_scale(&this->stl, fversor);
 }
 
 void TriangleMesh::translate(float x, float y, float z)
@@ -466,6 +526,77 @@ TriangleMesh::slice(const std::vector<double> &z)
     }
     
     return layers;
+}
+
+TriangleMeshPtrs
+TriangleMesh::split() const
+{
+    TriangleMeshPtrs meshes;
+    std::set<int> seen_facets;
+    
+    // we need neighbors
+    if (!this->repaired) CONFESS("split() requires repair()");
+    
+    // loop while we have remaining facets
+    while (1) {
+        // get the first facet
+        std::queue<int> facet_queue;
+        std::deque<int> facets;
+        for (int facet_idx = 0; facet_idx < this->stl.stats.number_of_facets; facet_idx++) {
+            if (seen_facets.find(facet_idx) == seen_facets.end()) {
+                // if facet was not seen put it into queue and start searching
+                facet_queue.push(facet_idx);
+                break;
+            }
+        }
+        if (facet_queue.empty()) break;
+        
+        while (!facet_queue.empty()) {
+            int facet_idx = facet_queue.front();
+            facet_queue.pop();
+            if (seen_facets.find(facet_idx) != seen_facets.end()) continue;
+            facets.push_back(facet_idx);
+            for (int j = 0; j <= 2; j++) {
+                facet_queue.push(this->stl.neighbors_start[facet_idx].neighbor[j]);
+            }
+            seen_facets.insert(facet_idx);
+        }
+        
+        TriangleMesh* mesh = new TriangleMesh;
+        meshes.push_back(mesh);
+        mesh->stl.stats.type = inmemory;
+        mesh->stl.stats.number_of_facets = facets.size();
+        mesh->stl.stats.original_num_facets = mesh->stl.stats.number_of_facets;
+        stl_allocate(&mesh->stl);
+        
+        for (std::deque<int>::const_iterator facet = facets.begin(); facet != facets.end(); facet++) {
+            mesh->stl.facet_start[facet - facets.begin()] = this->stl.facet_start[*facet];
+        }
+    }
+    
+    return meshes;
+}
+
+void
+TriangleMesh::merge(const TriangleMesh* mesh)
+{
+    // reset stats and metadata
+    int number_of_facets = this->stl.stats.number_of_facets;
+    stl_invalidate_shared_vertices(&this->stl);
+    this->repaired = false;
+    
+    // update facet count and allocate more memory
+    this->stl.stats.number_of_facets = number_of_facets + mesh->stl.stats.number_of_facets;
+    this->stl.stats.original_num_facets = this->stl.stats.number_of_facets;
+    stl_reallocate(&this->stl);
+    
+    // copy facets
+    for (int i = 0; i < mesh->stl.stats.number_of_facets; i++) {
+        this->stl.facet_start[number_of_facets + i] = mesh->stl.facet_start[i];
+    }
+    
+    // update size
+    stl_get_size(&this->stl);
 }
 
 }
