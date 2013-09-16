@@ -789,7 +789,6 @@ sub make_model {
         my $model_object = $plater_object->get_model_object;
         
         my $new_model_object = $model->add_object(
-            vertices    => $model_object->vertices,
             input_file  => $plater_object->input_file,
             config      => $plater_object->config,
             layer_height_ranges => $plater_object->layer_height_ranges,
@@ -798,7 +797,7 @@ sub make_model {
         foreach my $volume (@{$model_object->volumes}) {
             $new_model_object->add_volume(
                 material_id => $volume->material_id,
-                facets      => $volume->facets,
+                mesh        => $volume->mesh,
             );
             $model->set_material($volume->material_id || 0, {});
         }
@@ -1078,6 +1077,11 @@ sub object_preview_dialog {
     
     if (!defined $obj_idx) {
         ($obj_idx, undef) = $self->selected_object;
+    }
+    
+    if (!$Slic3r::GUI::have_OpenGL) {
+        Slic3r::GUI::show_error($self, "Please install the OpenGL modules to use this feature (see build instructions).");
+        return;
     }
     
     my $dlg = Slic3r::GUI::Plater::ObjectPreviewDialog->new($self,
