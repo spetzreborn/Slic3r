@@ -270,6 +270,13 @@ sub init_extruders {
             role            => 'support_material',
         ));
     }
+    
+    # enforce tall skirt if using standby_temperature
+    # NOTE: this is not idempotent (i.e. switching standby_temperature off will not revert skirt settings)
+    if ($self->config->standby_temperature) {
+        $self->config->set('skirt_height', 9999999999);
+        $self->config->set('skirts', 1) if $self->config->skirts == 0;
+    }
 }
 
 sub layer_count {
@@ -562,7 +569,8 @@ EOF
 
 sub make_skirt {
     my $self = shift;
-    return unless $Slic3r::Config->skirts > 0;
+    return unless $Slic3r::Config->skirts > 0
+        || ($Slic3r::Config->standby_temperature && @{$self->extruders} > 1);
     
     # collect points from all layers contained in skirt height
     my @points = ();
@@ -732,6 +740,7 @@ sub write_gcode {
         return if $Slic3r::Config->start_gcode =~ /M(?:109|104)/i;
         for my $t (0 .. $#{$self->extruders}) {
             my $temp = $self->extruders->[$t]->first_layer_temperature;
+            $temp += $self->config->standby_temperature_delta if $self->config->standby_temperature;
             printf $fh $gcodegen->set_temperature($temp, $wait, $t) if $temp > 0;
         }
     };
@@ -785,6 +794,12 @@ sub write_gcode {
             islands     => union_ex([ map @$_, @islands ]),
             no_internal => 1,
         ));
+    }
+    
+    # calculate wiping points if needed
+    if ($self->config->standby_temperature) {
+        my $outer_skirt = Slic3r::Polygon->new(@{convex_hull([ map $_->pp, map @$_, @{$self->skirt} ])});
+        $gcodegen->standby_points([ map $_->clone, map @$_, map $_->subdivide(scale 10), @{offset([$outer_skirt], scale 3)} ]);
     }
     
     # prepare the layer processor
