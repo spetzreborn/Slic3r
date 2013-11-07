@@ -86,6 +86,13 @@ our $Options = {
         type    => 'bool',
         default => 0,
     },
+    'use_firmware_retraction' => {
+        label   => 'Use firmware retraction',
+        tooltip => 'This experimental setting uses G10 and G11 commands to have the firmware handle the retraction. This is only supported in recent Marlin.',
+        cli     => 'use-firmware-retraction!',
+        type    => 'bool',
+        default => 0,
+    },
     'extrusion_axis' => {
         label   => 'Extrusion axis',
         tooltip => 'Use this option to set the axis letter associated to your printer\'s extruder (usually E but some printers use A).',
@@ -706,7 +713,7 @@ our $Options = {
     },
     'support_material_threshold' => {
         label   => 'Overhang threshold',
-        tooltip => 'Support material will not generated for overhangs whose slope angle is above the given threshold. Set to zero for automatic detection.',
+        tooltip => 'Support material will not be generated for overhangs whose slope angle (90° = vertical) is above the given threshold. In other words, this value represent the most horizontal slope (measured from the horizontal plane) that you can print without support material. Set to zero for automatic detection (recommended).',
         sidetext => '°',
         scope   => 'object',
         category => 'Support material',
@@ -1390,6 +1397,12 @@ sub validate {
     # --gcode-flavor
     die "Invalid value for --gcode-flavor\n"
         if !first { $_ eq $self->gcode_flavor } @{$Options->{gcode_flavor}{values}};
+    
+    die "--use-firmware-retraction is only supported by Marlin firmware\n"
+        if $self->use_firmware_retraction && $self->gcode_flavor ne 'reprap';
+    
+    die "--use-firmware-retraction is not compatible with --wipe\n"
+        if $self->use_firmware_retraction && first {$_} @{$self->wipe};
     
     # --print-center
     die "Invalid value for --print-center\n"

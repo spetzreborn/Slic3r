@@ -9,6 +9,10 @@
 #include <math.h>
 #include <assert.h>
 
+#ifdef SLIC3R_DEBUG
+#include "SVG.hpp"
+#endif
+
 namespace Slic3r {
 
 TriangleMesh::TriangleMesh()
@@ -208,13 +212,22 @@ TriangleMesh::slice(const std::vector<double> &z)
                 
                 int edge_idx;
                 t_edges_map::const_iterator my_edge = edges_map.find(std::make_pair(b_id,a_id));
-                if (my_edge == edges_map.end()) {
-                    // edge isn't listed in table, so we insert it
-                    edge_idx = edges.size();
-                    edges.push_back(std::make_pair(a_id,b_id));
-                    edges_map[ edges[edge_idx] ] = edge_idx;
-                } else {
+                if (my_edge != edges_map.end()) {
                     edge_idx = my_edge->second;
+                } else {
+                    /* admesh can assign the same edge ID to more than two facets (which is 
+                       still topologically correct), so we have to search for a duplicate of 
+                       this edge too in case it was already seen in this orientation */
+                    my_edge = edges_map.find(std::make_pair(a_id,b_id));
+                    
+                    if (my_edge != edges_map.end()) {
+                        edge_idx = my_edge->second;
+                    } else {
+                        // edge isn't listed in table, so we insert it
+                        edge_idx = edges.size();
+                        edges.push_back(std::make_pair(a_id,b_id));
+                        edges_map[ edges[edge_idx] ] = edge_idx;
+                    }
                 }
                 facets_edges[facet_idx][i] = edge_idx;
                 
@@ -258,7 +271,7 @@ TriangleMesh::slice(const std::vector<double> &z)
             std::vector<double>::size_type layer_idx = it - z.begin();
             double slice_z = *it;
             std::vector<IntersectionPoint> points;
-            std::vector< std::vector<IntersectionPoint>::size_type > points_on_layer, intersection_points;
+            std::vector< std::vector<IntersectionPoint>::size_type > points_on_layer;
             bool found_horizontal_edge = false;
             
             /* reorder vertices so that the first one is the one with lowest Z
@@ -281,16 +294,11 @@ TriangleMesh::slice(const std::vector<double> &z)
                 
                 if (a->z == b->z && a->z == slice_z) {
                     // edge is horizontal and belongs to the current layer
-                    #ifdef SLIC3R_DEBUG
-                    printf("Edge is horizontal!\n");
-                    #endif
                     
                     /* We assume that this method is never being called for horizontal
                        facets, so no other edge is going to be on this layer. */
                     IntersectionLine line;
-                    if (this->stl.v_indices[facet_idx].vertex[0] < slice_z
-                        || this->stl.v_indices[facet_idx].vertex[1] < slice_z
-                        || this->stl.v_indices[facet_idx].vertex[2] < slice_z) {
+                    if (facet->vertex[0].z < slice_z || facet->vertex[1].z < slice_z || facet->vertex[2].z < slice_z) {
                         line.edge_type = feTop;
                         std::swap(a, b);
                         std::swap(a_id, b_id);
@@ -308,10 +316,6 @@ TriangleMesh::slice(const std::vector<double> &z)
                     found_horizontal_edge = true;
                     break;
                 } else if (a->z == slice_z) {
-                    #ifdef SLIC3R_DEBUG
-                    printf("A point on plane!\n");
-                    #endif
-                    
                     IntersectionPoint point;
                     point.x         = a->x;
                     point.y         = a->y;
@@ -319,10 +323,6 @@ TriangleMesh::slice(const std::vector<double> &z)
                     points.push_back(point);
                     points_on_layer.push_back(points.size()-1);
                 } else if (b->z == slice_z) {
-                    #ifdef SLIC3R_DEBUG
-                    printf("B point on plane!\n");
-                    #endif
-                    
                     IntersectionPoint point;
                     point.x         = b->x;
                     point.y         = b->y;
@@ -331,28 +331,24 @@ TriangleMesh::slice(const std::vector<double> &z)
                     points_on_layer.push_back(points.size()-1);
                 } else if ((a->z < slice_z && b->z > slice_z) || (b->z < slice_z && a->z > slice_z)) {
                     // edge intersects the current layer; calculate intersection
-                    #ifdef SLIC3R_DEBUG
-                    printf("Intersects!\n");
-                    #endif
                     
                     IntersectionPoint point;
                     point.x         = b->x + (a->x - b->x) * (slice_z - b->z) / (a->z - b->z);
                     point.y         = b->y + (a->y - b->y) * (slice_z - b->z) / (a->z - b->z);
                     point.edge_id   = edge_id;
                     points.push_back(point);
-                    intersection_points.push_back(points.size()-1);
                 }
             }
             if (found_horizontal_edge) continue;
             
-            if (points_on_layer.size() == 2) {
-                if (intersection_points.size() == 1) {
-                    points.erase( points.begin() + points_on_layer[1] );
-                } else if (intersection_points.empty()) {
-                    if (points[ points_on_layer[0] ].coincides_with(&points[ points_on_layer[1] ])) {
-                        continue;
-                    }
-                }
+            if (!points_on_layer.empty()) {
+                // we can't have only one point on layer because each vertex gets detected
+                // twice (once for each edge), and we can't have three points on layer because
+                // we assume this code is not getting called for horizontal facets
+                assert(points_on_layer.size() == 2);
+                assert( points[ points_on_layer[0] ].point_id == points[ points_on_layer[1] ].point_id );
+                if (points.size() < 3) continue;  // no intersection point, this is a V-shaped facet tangent to plane
+                points.erase( points.begin() + points_on_layer[1] );
             }
             
             if (!points.empty()) {
@@ -375,6 +371,9 @@ TriangleMesh::slice(const std::vector<double> &z)
     std::vector<Polygons>* layers = new std::vector<Polygons>(z.size());
     for (std::vector<IntersectionLines>::iterator it = lines.begin(); it != lines.end(); ++it) {
         int layer_idx = it - lines.begin();
+        #ifdef SLIC3R_DEBUG
+        printf("Layer %d:\n", layer_idx);
+        #endif
         
         // remove tangent edges
         for (IntersectionLines::iterator line = it->begin(); line != it->end(); ++line) {
@@ -473,6 +472,9 @@ TriangleMesh::slice(const std::vector<double> &z)
                     
                     // we can't close this loop!
                     //// push @failed_loops, [@loop];
+                    #ifdef SLIC3R_DEBUG
+                    printf("  Unable to close this loop having %d points\n", (int)loop.size());
+                    #endif
                     goto CYCLE;
                 }
                 /*

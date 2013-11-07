@@ -23,6 +23,8 @@
     double length();
     Point* midpoint()
          %code{% const char* CLASS = "Slic3r::Point"; RETVAL = THIS->midpoint(); %};
+    Point* point_at(double distance)
+         %code{% const char* CLASS = "Slic3r::Point"; RETVAL = THIS->point_at(distance); %};
 %{
 
 Line*
@@ -43,6 +45,16 @@ Line::rotate(angle, center_sv)
         Point center;
         center.from_SV_check(center_sv);
         THIS->rotate(angle, &center);
+
+bool
+Line::coincides_with(line_sv)
+    SV*     line_sv;
+    CODE:
+        Line line;
+        line.from_SV_check(line_sv);
+        RETVAL = THIS->coincides_with(&line);
+    OUTPUT:
+        RETVAL
 
 %}
 };

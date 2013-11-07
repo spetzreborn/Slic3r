@@ -10,6 +10,8 @@ class Polyline : public MultiPoint {
     public:
     Point* last_point() const;
     Lines lines() const;
+    void clip_end(double distance);
+    void clip_start(double distance);
     
     #ifdef SLIC3RXS
     SV* to_SV_ref();

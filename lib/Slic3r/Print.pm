@@ -7,7 +7,7 @@ use List::Util qw(min max first);
 use Math::ConvexHull::MonotoneChain qw(convex_hull);
 use Slic3r::ExtrusionPath ':roles';
 use Slic3r::Geometry qw(X Y Z X1 Y1 X2 Y2 MIN MAX PI scale unscale move_points chained_path);
-use Slic3r::Geometry::Clipper qw(diff_ex union_ex union_pt intersection_ex offset
+use Slic3r::Geometry::Clipper qw(diff_ex union_ex union_pt intersection_ex intersection offset
     offset2 traverse_pt JT_ROUND JT_SQUARE);
 use Time::HiRes qw(gettimeofday tv_interval);
 
@@ -156,6 +156,15 @@ sub add_model {
             layer_height_ranges => $object->layer_height_ranges,
         );
     }
+    
+    if (!defined $self->extra_variables->{input_filename}) {
+        if (defined (my $input_file = $self->objects->[0]->input_file)) {
+            my $input_filename = my $input_filename_base = basename($input_file);
+            $input_filename_base =~ s/\.(?:stl|amf(?:\.xml)?)$//i;
+            $self->extra_variables->{input_filename} = $input_file;
+            $self->extra_variables->{input_filename_base} = $input_filename_base;
+        }
+    }
 }
 
 sub validate {
@@ -170,9 +179,7 @@ sub validate {
                 {
                     my @points = map [ @$_[X,Y] ], map @{$_->vertices}, @{$self->objects->[$obj_idx]->meshes};
                     my $convex_hull = Slic3r::Polygon->new(@{convex_hull(\@points)});
-                    ($clearance) = map Slic3r::Polygon->new(@$_), 
-                                        @{Slic3r::Geometry::Clipper::offset(
-                                            [$convex_hull], scale $Slic3r::Config->extruder_clearance_radius / 2, 1, JT_ROUND)};
+                    ($clearance) = @{offset([$convex_hull], scale $Slic3r::Config->extruder_clearance_radius / 2, 1, JT_ROUND)};
                 }
                 for my $copy (@{$self->objects->[$obj_idx]->copies}) {
                     my $copy_clearance = $clearance->clone;
@@ -180,7 +187,7 @@ sub validate {
                     if (@{ intersection(\@a, [$copy_clearance]) }) {
                         die "Some objects are too close; your extruder will collide with them.\n";
                     }
-                    @a = map @$_, @{union_ex([ @a, $copy_clearance ])};
+                    @a = map $_->clone, map @$_, @{union_ex([ @a, $copy_clearance ])};
                 }
             }
         }
@@ -488,7 +495,7 @@ sub export_svg {
     $_->slice for @{$self->objects};
     
     my $fh = $params{output_fh};
-    if ($params{output_file}) {
+    if (!$fh) {
         my $output_file = $self->expanded_output_filepath($params{output_file});
         $output_file =~ s/\.gcode$/.svg/i;
         Slic3r::open(\$fh, ">", $output_file) or die "Failed to open $output_file for writing\n";
@@ -745,7 +752,7 @@ sub write_gcode {
         }
     };
     $print_first_layer_temperature->(0);
-    printf $fh "%s\n", $Slic3r::Config->replace_options($Slic3r::Config->start_gcode);
+    printf $fh "%s\n", $self->replace_variables($Slic3r::Config->start_gcode);
     $print_first_layer_temperature->(1);
     
     # set other general things
@@ -892,7 +899,7 @@ sub write_gcode {
     # write end commands to file
     print $fh $gcodegen->retract if $gcodegen->extruder;  # empty prints don't even set an extruder
     print $fh $gcodegen->set_fan(0);
-    printf $fh "%s\n", $Slic3r::Config->replace_options($Slic3r::Config->end_gcode);
+    printf $fh "%s\n", $self->replace_variables($Slic3r::Config->end_gcode);
     
     foreach my $extruder (@{$self->extruders}) {
         printf $fh "; filament used = %.1fmm (%.1fcm3)\n",
@@ -931,14 +938,12 @@ sub expanded_output_filepath {
     # file directory and append the specified filename format
     $path ||= (fileparse($input_file))[1] . $Slic3r::Config->output_filename_format;
     
-    my $input_filename = my $input_filename_base = basename($input_file);
-    $input_filename_base =~ s/\.(?:stl|amf(?:\.xml)?)$//i;
-    
-    return $Slic3r::Config->replace_options($path, {
-        input_filename      => $input_filename,
-        input_filename_base => $input_filename_base,
-        %{ $self->extra_variables },
-    });
+    return $self->replace_variables($path);
+}
+
+sub replace_variables {
+    my ($self, $string, $extra) = @_;
+    return $self->config->replace_options($string, { %{$self->extra_variables}, %{ $extra || {} } });
 }
 
 1;
