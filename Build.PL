@@ -19,6 +19,7 @@ my %prereqs = qw(
     Moo                             1.003001
     Scalar::Util                    0
     Storable                        0
+    Test::Harness                   0
     Test::More                      0
     IO::Scalar                      0
     Time::HiRes                     0
@@ -40,12 +41,12 @@ if ($gui) {
     );
 }
 
-my $missing_prereqs = 0;
+my @missing_prereqs = ();
 if ($ENV{SLIC3R_NO_AUTO}) {
     foreach my $module (sort keys %prereqs) {
         my $version = $prereqs{$module};
         next if eval "use $module $version; 1";
-        $missing_prereqs = 1 if exists $prereqs{$module};
+        push @missing_prereqs, $module if exists $prereqs{$module};
         print "Missing prerequisite $module $version\n";
     }
     foreach my $module (sort keys %recommends) {
@@ -99,10 +100,14 @@ EOF
     my %modules = (%prereqs, %recommends);
     foreach my $module (sort keys %modules) {
         my $version = $modules{$module};
-        my $res = system $cpanm, "$module~$version";
+        my @cmd = ($cpanm, "$module~$version");
+        if ($module eq 'XML::SAX::ExpatXS' && $^O eq 'MSWin32') {
+            push @cmd, '--configure-args="EXPATLIBPATH=C:\dev\CitrusPerl\mingw64\lib EXPATINCPATH=C:\dev\CitrusPerl\mingw64\include"';
+        }
+        my $res = system @cmd;
         if ($res != 0) {
             if (exists $prereqs{$module}) {
-                $missing_prereqs = 1;
+                push @missing_prereqs, $module;
             } else {
                 printf "Don't worry, this module is optional.\n";
             }
@@ -125,19 +130,23 @@ EOF
                 system './xs/Build', 'distclean';
             }
         }
-        system $cpanm, '--reinstall', './xs';
+        my $res = system $cpanm, '--reinstall', './xs';
+        if ($res != 0) {
+            die "The XS/C++ code failed to compile, aborting\n";
+        }
     }
 }
 
-if ($missing_prereqs) {
+if (@missing_prereqs) {
+    printf "The following prerequisites failed to install: %s\n", join(', ', @missing_prereqs);
     exit 1;
-} else {
-    my $res = 0;
-    if (eval "use App::Prove; 1") {
-        $res = App::Prove->new->run ? 0 : 1;
-    }
-    if (!$gui) {
+} elsif (!$gui) {
+    eval "use App::Prove; 1" or die "Failed to load App::Prove";
+    my $res = App::Prove->new->run ? 0 : 1;
+    if ($res == 0) {
         print "If you also want to use the GUI you can now run `perl Build.PL --gui` to install the required modules.\n";
+    } else {
+        print "Some tests failed. Please report the failure to the author!\n";
     }
     exit $res;
 }

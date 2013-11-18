@@ -73,20 +73,24 @@ sub OnInit {
     
     # locate or create data directory
     $datadir ||= Wx::StandardPaths::Get->GetUserDataDir;
+    $datadir = Slic3r::encode_path($datadir);
     Slic3r::debugf "Data directory: %s\n", $datadir;
-    my $encoded_datadir = Slic3r::encode_path($datadir);
-    my $run_wizard = (-d $encoded_datadir) ? 0 : 1;
-    for ($encoded_datadir, "$encoded_datadir/print", "$encoded_datadir/filament", "$encoded_datadir/printer") {
+    my $run_wizard = (-d $datadir) ? 0 : 1;
+    for ($datadir, "$datadir/print", "$datadir/filament", "$datadir/printer") {
         mkdir or $self->fatal_error("Slic3r was unable to create its data directory at $_ (errno: $!).")
             unless -d $_;
     }
     
     # load settings
-    if (-f "$encoded_datadir/slic3r.ini") {
+    my $last_version;
+    if (-f "$datadir/slic3r.ini") {
         my $ini = eval { Slic3r::Config->read_ini("$datadir/slic3r.ini") };
         $Settings = $ini if $ini;
+        $last_version = $Settings->{_}{version};
         $Settings->{_}{mode} ||= 'expert';
     }
+    $Settings->{_}{version} ||= $Slic3r::VERSION;
+    Slic3r::GUI->save_settings;
     
     # application frame
     Wx::Image::AddHandler(Wx::PNGHandler->new);
@@ -206,6 +210,15 @@ sub OnInit {
     $frame->Show;
     $frame->Layout;
     
+    if (!$run_wizard && (!defined $last_version || $last_version ne $Slic3r::VERSION)) {
+        # user was running another Slic3r version on this computer
+        if (!defined $last_version || $last_version =~ /^0\./) {
+            show_info($self->{skeinpanel}, "Hello! Support material was improved since the "
+                . "last version of Slic3r you used. It is strongly recommended to revert "
+                . "your support material settings to the factory defaults and start from "
+                . "those. Enjoy and provide feedback!", "Support Material");
+        }
+    }
     $self->{skeinpanel}->config_wizard if $run_wizard;
     
     Slic3r::GUI->check_version

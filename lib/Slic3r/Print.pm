@@ -159,10 +159,7 @@ sub add_model {
     
     if (!defined $self->extra_variables->{input_filename}) {
         if (defined (my $input_file = $self->objects->[0]->input_file)) {
-            my $input_filename = my $input_filename_base = basename($input_file);
-            $input_filename_base =~ s/\.(?:stl|amf(?:\.xml)?)$//i;
-            $self->extra_variables->{input_filename} = $input_file;
-            $self->extra_variables->{input_filename_base} = $input_filename_base;
+            @{$self->extra_variables}{qw(input_filename input_filename_base)} = parse_filename($input_file);
         }
     }
 }
@@ -278,9 +275,9 @@ sub init_extruders {
         ));
     }
     
-    # enforce tall skirt if using standby_temperature
-    # NOTE: this is not idempotent (i.e. switching standby_temperature off will not revert skirt settings)
-    if ($self->config->standby_temperature) {
+    # enforce tall skirt if using ooze_prevention
+    # NOTE: this is not idempotent (i.e. switching ooze_prevention off will not revert skirt settings)
+    if ($self->config->ooze_prevention && @{$self->extruders} > 1) {
         $self->config->set('skirt_height', 9999999999);
         $self->config->set('skirts', 1) if $self->config->skirts == 0;
     }
@@ -379,7 +376,7 @@ sub export_gcode {
     # this will detect bridges and reverse bridges
     # and rearrange top/bottom/internal surfaces
     $status_cb->(45, "Detect bridges");
-    $_->process_external_surfaces for map @{$_->regions}, map @{$_->layers}, @{$self->objects};
+    $_->process_external_surfaces for @{$self->objects};
     
     # detect which fill surfaces are near external layers
     # they will be split in internal and internal-solid surfaces
@@ -577,7 +574,7 @@ EOF
 sub make_skirt {
     my $self = shift;
     return unless $Slic3r::Config->skirts > 0
-        || ($Slic3r::Config->standby_temperature && @{$self->extruders} > 1);
+        || ($Slic3r::Config->ooze_prevention && @{$self->extruders} > 1);
     
     # collect points from all layers contained in skirt height
     my @points = ();
@@ -747,7 +744,7 @@ sub write_gcode {
         return if $Slic3r::Config->start_gcode =~ /M(?:109|104)/i;
         for my $t (0 .. $#{$self->extruders}) {
             my $temp = $self->extruders->[$t]->first_layer_temperature;
-            $temp += $self->config->standby_temperature_delta if $self->config->standby_temperature;
+            $temp += $self->config->standby_temperature_delta if $self->config->ooze_prevention;
             printf $fh $gcodegen->set_temperature($temp, $wait, $t) if $temp > 0;
         }
     };
@@ -804,9 +801,15 @@ sub write_gcode {
     }
     
     # calculate wiping points if needed
-    if ($self->config->standby_temperature) {
+    if ($self->config->ooze_prevention) {
         my $outer_skirt = Slic3r::Polygon->new(@{convex_hull([ map $_->pp, map @$_, @{$self->skirt} ])});
-        $gcodegen->standby_points([ map $_->clone, map @$_, map $_->subdivide(scale 10), @{offset([$outer_skirt], scale 3)} ]);
+        my @skirts = ();
+        foreach my $extruder (@{$self->extruders}) {
+            push @skirts, my $s = $outer_skirt->clone;
+            $s->translate(map scale($_), @{$extruder->extruder_offset});
+        }
+        my $convex_hull = Slic3r::Polygon->new(@{convex_hull([ map @$_, map $_->pp, @skirts ])});
+        $gcodegen->standby_points([ map $_->clone, map @$_, map $_->subdivide(scale 10), @{offset([$convex_hull], scale 3)} ]);
     }
     
     # prepare the layer processor
@@ -926,24 +929,41 @@ sub expanded_output_filepath {
     my $self = shift;
     my ($path, $input_file) = @_;
     
-    # if no input file was supplied, take the first one from our objects
-    $input_file ||= $self->objects->[0]->input_file;
-    return undef if !defined $input_file;
+    my $extra_variables = {};
+    if ($input_file) {
+        @$extra_variables{qw(input_filename input_filename_base)} = parse_filename($input_file);
+    } else {
+        # if no input file was supplied, take the first one from our objects
+        $input_file = $self->objects->[0]->input_file // return undef;
+    }
     
-    # if output path is an existing directory, we take that and append
-    # the specified filename format
-    $path = File::Spec->join($path, $Slic3r::Config->output_filename_format) if ($path && -d $path);
-
-    # if no explicit output file was defined, we take the input
-    # file directory and append the specified filename format
-    $path ||= (fileparse($input_file))[1] . $Slic3r::Config->output_filename_format;
+    if ($path && -d $path) {
+        # if output path is an existing directory, we take that and append
+        # the specified filename format
+        $path = File::Spec->join($path, $self->config->output_filename_format);
+    } elsif (!$path) {
+        # if no explicit output file was defined, we take the input
+        # file directory and append the specified filename format
+        $path = (fileparse($input_file))[1] . $self->config->output_filename_format;
+    } else {
+        # path is a full path to a file so we use it as it is
+    }
     
-    return $self->replace_variables($path);
+    return $self->replace_variables($path, $extra_variables);
 }
 
 sub replace_variables {
     my ($self, $string, $extra) = @_;
     return $self->config->replace_options($string, { %{$self->extra_variables}, %{ $extra || {} } });
+}
+
+# given the path to a file, this function returns its filename with and without extension
+sub parse_filename {
+    my ($path) = @_;
+    
+    my $filename = my $filename_base = basename($path);
+    $filename_base =~ s/\.[^.]+$//;
+    return ($filename, $filename_base);
 }
 
 1;

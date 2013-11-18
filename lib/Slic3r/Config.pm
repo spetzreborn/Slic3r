@@ -7,7 +7,7 @@ use List::Util qw(first);
 
 # cemetery of old config settings
 our @Ignore = qw(duplicate_x duplicate_y multiply_x multiply_y support_material_tool acceleration
-    adjust_overhang_flow);
+    adjust_overhang_flow standby_temperature);
 
 my $serialize_comma     = sub { join ',', @{$_[0]} };
 my $serialize_comma_bool = sub { join ',', map $_ // 0, @{$_[0]} };
@@ -226,10 +226,10 @@ our $Options = {
     },
     
     # multiple extruder options
-    'standby_temperature' => {
+    'ooze_prevention' => {
         label   => 'Enable',
         tooltip => 'This option will drop the temperature of the inactive extruders to prevent oozing. It will enable a tall skirt automatically and move extruders outside such skirt when changing temperatures.',
-        cli     => 'standby-temperature!',
+        cli     => 'ooze-prevention!',
         type    => 'bool',
         default => 0,
     },

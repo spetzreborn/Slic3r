@@ -10,6 +10,7 @@ BEGIN {
 
 use Getopt::Long qw(:config no_auto_abbrev);
 use List::Util qw(first);
+use POSIX qw(setlocale LC_NUMERIC);
 use Slic3r;
 $|++;
 
@@ -84,6 +85,7 @@ if (!@ARGV && !$opt{save} && eval "require Slic3r::GUI; 1") {
         $Slic3r::GUI::autosave  = $opt{autosave};
     }
     $gui = Slic3r::GUI->new;
+    setlocale(LC_NUMERIC, 'C');
     $gui->{skeinpanel}->load_config_file($_) for @{$opt{load}};
     $gui->{skeinpanel}->load_config($cli_config);
     $gui->MainLoop;
@@ -417,12 +419,17 @@ $j
     --extruder-offset   Offset of each extruder, if firmware doesn't handle the displacement
                         (can be specified multiple times, default: 0x0)
     --perimeter-extruder
-                        Extruder to use for perimeters (1+, default: 1)
-    --infill-extruder   Extruder to use for infill (1+, default: 1)
+                        Extruder to use for perimeters (1+, default: $config->{perimeter_extruder})
+    --infill-extruder   Extruder to use for infill (1+, default: $config->{infill_extruder})
     --support-material-extruder
-                        Extruder to use for support material (1+, default: 1)
+                        Extruder to use for support material (1+, default: $config->{support_material_extruder})
     --support-material-interface-extruder
-                        Extruder to use for support material interface (1+, default: 1)
+                        Extruder to use for support material interface (1+, default: $config->{support_material_interface_extruder})
+    --ooze-prevention   Drop temperature and park extruders outside a full skirt for automatic wiping
+                        (default: no)
+    --standby-temperature-delta
+                        Temperature difference to be applied when an extruder is not active and
+                        --ooze-prevention is enabled (default: $config->{standby_temperature_delta})
     
 EOF
     exit ($exit_code || 0);

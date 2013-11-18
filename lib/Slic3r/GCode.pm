@@ -93,13 +93,8 @@ sub change_layer {
     $self->layer($layer);
     
     # avoid computing islands and overhangs if they're not needed
-    if ($self->config->only_retract_when_crossing_perimeters) {
-        $self->_layer_islands([ $layer->islands ]);
-        $self->_upper_layer_islands([ $layer->upper_layer_islands ]);
-    } else {
-        $self->_layer_islands([]);
-        $self->_upper_layer_islands([]);
-    }
+    $self->_layer_islands($layer->islands);
+    $self->_upper_layer_islands($layer->upper_layer ? $layer->upper_layer->islands : []);
     $self->_layer_overhangs_pp(
         # clone ExPolygons because they come from Surface objects but will be used outside here
         ($layer->id > 0 && ($layer->config->overhangs || $Slic3r::Config->start_perimeters_at_non_overhang))
@@ -437,7 +432,7 @@ sub _plan {
     my $need_retract = !$self->config->only_retract_when_crossing_perimeters;
     if (!$need_retract) {
         $need_retract = 1;
-        foreach my $island ($self->layer->upper_layer_islands) {
+        foreach my $island (@{$self->_upper_layer_islands}) {
             # discard the island if at any line is not enclosed in it
             next if first { !$island->encloses_line($_, scaled_epsilon) } @travel;
             # okay, this island encloses the full travel path
@@ -653,7 +648,7 @@ sub set_extruder {
     }
     
     # set the current extruder to the standby temperature
-    if ($self->config->standby_temperature && defined $self->extruder) {
+    if ($self->config->ooze_prevention && defined $self->extruder) {
         # move to the nearest standby point
         $gcode .= $self->travel_to($self->last_pos->nearest_point($self->standby_points));
         
@@ -678,7 +673,7 @@ sub set_extruder {
     $gcode .= $self->reset_e;
     
     # set the new extruder to the operating temperature
-    if ($self->config->standby_temperature) {
+    if ($self->config->ooze_prevention) {
         my $temp = defined $self->layer && $self->layer->id == 0
             ? $self->extruder->first_layer_temperature
             : $self->extruder->temperature;
