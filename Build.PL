@@ -7,15 +7,15 @@ use Config;
 use File::Spec;
 
 my %prereqs = qw(
-    Boost::Geometry::Utils          0.15
     Encode::Locale                  0
     ExtUtils::MakeMaker             6.80
+    ExtUtils::ParseXS               3.22
     File::Basename                  0
     File::Spec                      0
     Getopt::Long                    0
-    Math::ConvexHull::MonotoneChain 0.01
     Math::Geometry::Voronoi         1.3
     Math::PlanePath                 53
+    Module::Build::WithXSpp         0.14
     Moo                             1.003001
     Scalar::Util                    0
     Storable                        0
@@ -26,7 +26,6 @@ my %prereqs = qw(
 );
 my %recommends = qw(
     Class::XSAccessor               0
-    Growl::GNTP                     0.15
     XML::SAX::ExpatXS               0
 );
 
@@ -36,6 +35,7 @@ if ($gui) {
     Wx                              0.9918
     );
     %recommends = qw(
+    Growl::GNTP                     0.15
     Wx::GLCanvas                    0
     OpenGL                          0
     );
@@ -102,7 +102,13 @@ EOF
         my $version = $modules{$module};
         my @cmd = ($cpanm, "$module~$version");
         if ($module eq 'XML::SAX::ExpatXS' && $^O eq 'MSWin32') {
-            push @cmd, '--configure-args="EXPATLIBPATH=C:\dev\CitrusPerl\mingw64\lib EXPATINCPATH=C:\dev\CitrusPerl\mingw64\include"';
+            my $mingw = 'C:\dev\CitrusPerl\mingw64';
+            $mingw = 'C:\dev\CitrusPerl\mingw32' if !-d $mingw;
+            if (!-d $mingw) {
+                print "Could not find the MinGW directory at $mingw; skipping XML::SAX::ExpatXS (only needed for faster parsing of AMF files)\n";
+            } else {
+                push @cmd, sprintf('--configure-args="EXPATLIBPATH=%s\lib EXPATINCPATH=%s\include"', $mingw, $mingw);
+            }
         }
         my $res = system @cmd;
         if ($res != 0) {
@@ -115,10 +121,6 @@ EOF
     }
     
     if (!$gui) {
-        # temporarily require this dev version until this upstream bug
-        # is resolved: https://rt.cpan.org/Ticket/Display.html?id=86367
-        system $cpanm, 'SMUELLER/ExtUtils-ParseXS-3.18_04.tar.gz';
-        
         # clean xs directory before reinstalling, to make sure Build is called
         # with current perl binary
         if (-e './xs/Build') {

@@ -5,6 +5,13 @@
 
 namespace Slic3r {
 
+Polygon::operator Polygons() const
+{
+    Polygons pp;
+    pp.push_back(*this);
+    return pp;
+}
+
 Point*
 Polygon::last_point() const
 {
@@ -65,19 +72,17 @@ Polygon::equally_spaced_points(double distance) const
 double
 Polygon::area() const
 {
-    ClipperLib::Polygon p;
-    Slic3rPolygon_to_ClipperPolygon(*this, p);
+    ClipperLib::Path p;
+    Slic3rMultiPoint_to_ClipperPath(*this, p);
     return ClipperLib::Area(p);
 }
 
 bool
 Polygon::is_counter_clockwise() const
 {
-    ClipperLib::Polygon* p = new ClipperLib::Polygon();
-    Slic3rPolygon_to_ClipperPolygon(*this, *p);
-    bool orientation = ClipperLib::Orientation(*p);
-    delete p;
-    return orientation;
+    ClipperLib::Path p;
+    Slic3rMultiPoint_to_ClipperPath(*this, p);
+    return ClipperLib::Orientation(p);
 }
 
 bool
@@ -110,6 +115,41 @@ bool
 Polygon::is_valid() const
 {
     return this->points.size() >= 3;
+}
+
+bool
+Polygon::contains_point(const Point* point) const
+{
+    // http://www.ecse.rpi.edu/Homepages/wrf/Research/Short_Notes/pnpoly.html
+    bool result = false;
+    Points::const_iterator i = this->points.begin();
+    Points::const_iterator j = this->points.end() - 1;
+    for (; i != this->points.end(); j = i++) {
+        if ( ((i->y > point->y) != (j->y > point->y))
+            && (point->x < (j->x - i->x) * (point->y - i->y) / (j->y - i->y) + i->x) )
+            result = !result;
+    }
+    return result;
+}
+
+Polygons
+Polygon::simplify(double tolerance) const
+{
+    Polygon p = *this;
+    p.points = MultiPoint::_douglas_peucker(p.points, tolerance);
+    
+    Polygons pp;
+    pp.push_back(p);
+    simplify_polygons(pp, pp);
+    return pp;
+}
+
+void
+Polygon::simplify(double tolerance, Polygons &polygons) const
+{
+    Polygons pp = this->simplify(tolerance);
+    polygons.reserve(polygons.size() + pp.size());
+    polygons.insert(polygons.end(), pp.begin(), pp.end());
 }
 
 #ifdef SLIC3RXS

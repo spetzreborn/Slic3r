@@ -33,6 +33,8 @@
     bool is_valid();
     Point* first_point()
         %code{% const char* CLASS = "Slic3r::Point"; RETVAL = THIS->first_point(); %};
+    bool contains_point(Point* point);
+    Polygons simplify(double tolerance);
 %{
 
 Polygon*

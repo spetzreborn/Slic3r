@@ -5,8 +5,8 @@ use warnings;
 # a polygon is a closed polyline.
 use parent 'Slic3r::Polyline';
 
-use Slic3r::Geometry qw(polygon_remove_parallel_continuous_edges
-    polygon_remove_acute_vertices polygon_segment_having_point
+use Slic3r::Geometry qw(
+    polygon_segment_having_point
     PI X1 X2 Y1 Y2 epsilon);
 
 sub wkt {
@@ -14,35 +14,9 @@ sub wkt {
     return sprintf "POLYGON((%s))", join ',', map "$_->[0] $_->[1]", @$self;
 }
 
-sub merge_continuous_lines {
-    my $self = shift;
-    
-    my $p = $self->pp;
-    polygon_remove_parallel_continuous_edges($p);
-    return __PACKAGE__->new(@$p);
-}
-
-sub remove_acute_vertices {
-    my $self = shift;
-    polygon_remove_acute_vertices($self);
-}
-
-sub encloses_point {
-    my $self = shift;
-    my ($point) = @_;
-    return Boost::Geometry::Utils::point_covered_by_polygon($point->pp, [$self->pp]);
-}
-
 sub grow {
     my $self = shift;
     return $self->split_at_first_point->grow(@_);
-}
-
-# NOTE that this will turn the polygon to ccw regardless of its 
-# original orientation
-sub simplify {
-    my $self = shift;
-    return @{Slic3r::Geometry::Clipper::simplify_polygons([ $self->SUPER::simplify(@_) ])};
 }
 
 # this method subdivides the polygon segments to that no one of them

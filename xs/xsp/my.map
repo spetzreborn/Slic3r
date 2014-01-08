@@ -1,6 +1,17 @@
+std::vector<Points::size_type>  T_STD_VECTOR_INT
+t_config_option_key T_STD_STRING
+
+BoundingBox*         O_OBJECT
+BoundingBoxf3*         O_OBJECT
+DynamicPrintConfig*  O_OBJECT
+PrintObjectConfig*  O_OBJECT
+PrintRegionConfig*  O_OBJECT
+PrintConfig*  O_OBJECT
+FullPrintConfig*  O_OBJECT
 ZTable*         O_OBJECT
 TriangleMesh*         O_OBJECT
 Point*         O_OBJECT
+Pointf3*         O_OBJECT
 Line*           O_OBJECT
 Polyline*       O_OBJECT
 PolylineCollection*    O_OBJECT
@@ -10,19 +21,26 @@ ExPolygonCollection*    O_OBJECT
 ExtrusionEntityCollection*    O_OBJECT
 ExtrusionPath*  O_OBJECT
 ExtrusionLoop*  O_OBJECT
+Flow*           O_OBJECT
+PrintState*  O_OBJECT
 Surface*        O_OBJECT
 SurfaceCollection*      O_OBJECT
 
 ExtrusionRole     T_UV
+FlowRole     T_UV
+PrintStep     T_UV
 SurfaceType     T_UV
 ClipperLib::JoinType		T_UV
 ClipperLib::PolyFillType		T_UV
 
 # we return these types whenever we want the items to be cloned
 Points          T_ARRAYREF
+Pointfs         T_ARRAYREF
 Lines           T_ARRAYREF
 Polygons        T_ARRAYREF
+Polylines       T_ARRAYREF
 ExPolygons      T_ARRAYREF
+Surfaces        T_ARRAYREF
 
 # we return these types whenever we want the items to be returned
 # by reference and marked ::Ref because they're contained in another

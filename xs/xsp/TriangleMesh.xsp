@@ -24,6 +24,14 @@
     void rotate(double angle, Point* center);
     TriangleMeshPtrs split();
     void merge(TriangleMesh* mesh);
+    ExPolygons horizontal_projection()
+        %code{% THIS->horizontal_projection(RETVAL); %};
+    BoundingBoxf3* bounding_box()
+        %code{%
+            const char* CLASS = "Slic3r::Geometry::BoundingBoxf3";
+            RETVAL = new BoundingBoxf3();
+            THIS->bounding_box(RETVAL);
+        %};
 %{
 
 SV*
@@ -129,20 +137,20 @@ SV*
 TriangleMesh::slice(z)
     std::vector<double>* z
     CODE:
-        std::vector<Polygons>* layers = THIS->slice(*z);
+        std::vector<ExPolygons> layers;
+        THIS->slice(*z, &layers);
         
         AV* layers_av = newAV();
-        av_extend(layers_av, layers->size()-1);
-        for (unsigned int i = 0; i < layers->size(); i++) {
-            AV* polygons_av = newAV();
-            av_extend(polygons_av, (*layers)[i].size()-1);
+        av_extend(layers_av, layers.size()-1);
+        for (unsigned int i = 0; i < layers.size(); i++) {
+            AV* expolygons_av = newAV();
+            av_extend(expolygons_av, layers[i].size()-1);
             unsigned int j = 0;
-            for (Polygons::iterator it = (*layers)[i].begin(); it != (*layers)[i].end(); ++it) {
-                av_store(polygons_av, j++, (*it).to_SV_clone_ref());
+            for (ExPolygons::iterator it = layers[i].begin(); it != layers[i].end(); ++it) {
+                av_store(expolygons_av, j++, (*it).to_SV_clone_ref());
             }
-            av_store(layers_av, i, newRV_noinc((SV*)polygons_av));
+            av_store(layers_av, i, newRV_noinc((SV*)expolygons_av));
         }
-        delete layers;
         RETVAL = (SV*)newRV_noinc((SV*)layers_av);
     OUTPUT:
         RETVAL
@@ -156,6 +164,16 @@ TriangleMesh::bb3()
         RETVAL.push_back(THIS->stl.stats.max.y);
         RETVAL.push_back(THIS->stl.stats.min.z);
         RETVAL.push_back(THIS->stl.stats.max.z);
+    OUTPUT:
+        RETVAL
+
+Polygon*
+TriangleMesh::convex_hull()
+    PREINIT:
+        const char* CLASS = "Slic3r::Polygon";
+    CODE:
+        RETVAL = new Polygon ();
+        THIS->convex_hull(RETVAL);
     OUTPUT:
         RETVAL
 

@@ -16,6 +16,8 @@
     void rotate(double angle, Point* center);
     int count()
         %code{% RETVAL = THIS->expolygons.size(); %};
+    bool contains_point(Point* point);
+    void simplify(double tolerance);
 %{
 
 ExPolygonCollection*
@@ -65,6 +67,16 @@ ExPolygonCollection::append(...)
             expolygon.from_SV_check( ST(i) );
             THIS->expolygons.push_back(expolygon);
         }
+
+Polygon*
+ExPolygonCollection::convex_hull()
+    PREINIT:
+        const char* CLASS = "Slic3r::Polygon";
+    CODE:
+        RETVAL = new Polygon ();
+        THIS->convex_hull(RETVAL);
+    OUTPUT:
+        RETVAL
 
 %}
 };

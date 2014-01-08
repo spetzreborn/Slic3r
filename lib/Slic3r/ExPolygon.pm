@@ -4,11 +4,10 @@ use warnings;
 
 # an ExPolygon is a polygon with holes
 
-use Boost::Geometry::Utils;
 use List::Util qw(first);
 use Math::Geometry::Voronoi;
 use Slic3r::Geometry qw(X Y A B point_in_polygon epsilon scaled_epsilon);
-use Slic3r::Geometry::Clipper qw(union_ex);
+use Slic3r::Geometry::Clipper qw(union_ex diff_pl);
 
 sub wkt {
     my $self = shift;
@@ -39,63 +38,9 @@ sub noncollapsing_offset_ex {
     return $self->offset_ex($distance + 1, @params);
 }
 
-sub encloses_point {
-    my $self = shift;
-    my ($point) = @_;
-    return Boost::Geometry::Utils::point_covered_by_polygon($point->pp, $self->pp);
-}
-
-# A version of encloses_point for use when hole borders do not matter.
-# Useful because point_on_segment is probably slower (this was true
-# before the switch to Boost.Geometry, not sure about now)
-sub encloses_point_quick {
-    my $self = shift;
-    my ($point) = @_;
-    return Boost::Geometry::Utils::point_within_polygon($point->pp, $self->pp);
-}
-
-sub encloses_line {
-    my $self = shift;
-    my ($line, $tolerance) = @_;
-    my $clip = $self->clip_line($line);
-    if (!defined $tolerance) {
-        # optimization
-        return @$clip == 1 && $clip->[0]->coincides_with($line);
-    } else {
-        return @$clip == 1 && abs($clip->[0]->length - $line->length) < $tolerance;
-    }
-}
-
 sub bounding_box {
     my $self = shift;
     return $self->contour->bounding_box;
-}
-
-sub clip_line {
-    my $self = shift;
-    my ($line) = @_;  # line must be a Slic3r::Line object
-    
-    return [
-        map Slic3r::Line->new(@$_),
-            @{Boost::Geometry::Utils::polygon_multi_linestring_intersection($self->pp, [$line->pp])}
-    ];
-}
-
-sub simplify_as_polygons {
-    my $self = shift;
-    my ($tolerance) = @_;
-    
-    # it would be nice to have a multilinestring_simplify method in B::G::U
-    return @{Slic3r::Geometry::Clipper::simplify_polygons(
-        [ map Boost::Geometry::Utils::linestring_simplify($_, $tolerance), @{$self->pp} ],
-    )};
-}
-
-sub simplify {
-    my $self = shift;
-    my ($tolerance) = @_;
-    
-    return @{ Slic3r::Geometry::Clipper::union_ex([ $self->simplify_as_polygons($tolerance) ]) };
 }
 
 # this method only works for expolygons having only a contour or
@@ -138,17 +83,17 @@ sub _medial_axis_clip {
         my @polylines = ();
         foreach my $line (@{$polygon->lines}) {
             # remove the areas that are already covered from this line
-            my $clipped = Boost::Geometry::Utils::multi_linestring_multi_polygon_difference([$line->pp], [ map $_->pp, @{union_ex($covered)} ]);
+            my $clipped = diff_pl([$line->as_polyline], $covered);
             
             # skip very short segments/dots
-            @$clipped = grep $_->length > $width/10, map Slic3r::Polyline->new(@$_), @$clipped;
+            @$clipped = grep $_->length > $width/10, @$clipped;
             
             # grow the remaining lines and add them to the covered areas
             push @$covered, map $grow->($_, $width*1.1), @$clipped;
             
             # if the first remaining segment is connected to the last polyline, append it 
-            # to that -- NOTE: this assumes that multi_linestring_multi_polygon_difference()
-            # preserved the orientation of the input linestring
+            # to that -- FIXME: this assumes that diff_pl()
+            # preserved the orientation of the input linestring but this is not generally true
             if (@polylines && @$clipped && $clipped->[0]->first_point->distance_to($polylines[-1]->last_point) <= $width/10) {
                 $polylines[-1]->append_polyline(shift @$clipped);
             }
@@ -204,8 +149,13 @@ sub _medial_axis_voronoi {
         # ignore lines going to infinite
         next if $edge->[1] == -1 || $edge->[2] == -1;
         
-        next if !$self->encloses_point_quick(Slic3r::Point->new(@{$vertices->[$edge->[1]]}))
-             || !$self->encloses_point_quick(Slic3r::Point->new(@{$vertices->[$edge->[2]]}));
+        my $line = Slic3r::Line->new($vertices->[$edge->[1]], $vertices->[$edge->[2]]);
+        next if !$self->contains_line($line);
+        
+        # contains_point() could be faster, but we need an implementation that
+        # reliably considers points on boundary
+        #next if !$self->contains_point(Slic3r::Point->new(@{$vertices->[$edge->[1]]}))
+        #     || !$self->contains_point(Slic3r::Point->new(@{$vertices->[$edge->[2]]}));
         
         push @skeleton_lines, [$edge->[1], $edge->[2]];
     }
@@ -237,6 +187,7 @@ sub _medial_axis_voronoi {
     }
     
     my @result = ();
+    my $simplify_tolerance = $width / 7;
     foreach my $polyline (@polylines) {
         next unless @$polyline >= 2;
         
@@ -245,11 +196,11 @@ sub _medial_axis_voronoi {
         
         if ($points[0]->coincides_with($points[-1])) {
             next if @points == 2;
-            push @result, Slic3r::Polygon->new(@points[0..$#points-1]);
+            push @result, @{Slic3r::Polygon->new(@points[0..$#points-1])->simplify($simplify_tolerance)};
         } else {
             push @result, Slic3r::Polyline->new(@points);
+            $result[-1]->simplify($simplify_tolerance);
         }
-        $result[-1]->simplify($width / 7);
     }
     
     return @result;
@@ -257,14 +208,6 @@ sub _medial_axis_voronoi {
 
 package Slic3r::ExPolygon::Collection;
 use Slic3r::Geometry qw(X1 Y1);
-
-sub align_to_origin {
-    my $self = shift;
-    
-    my @bb = Slic3r::Geometry::bounding_box([ map @$_, map @$_, @$self ]);
-    $self->translate(-$bb[X1], -$bb[Y1]);
-    $self;
-}
 
 sub size {
     my $self = shift;

@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 use Slic3r::XS;
-use Test::More tests => 51;
+use Test::More tests => 52;
 
 is Slic3r::TriangleMesh::hello_world(), 'Hello world!',
     'hello world';
@@ -59,6 +59,7 @@ my $cube = {
         my $meshes = $m->split;
         is scalar(@$meshes), 1, 'split';
         isa_ok $meshes->[0], 'Slic3r::TriangleMesh', 'split';
+        is_deeply $m->bb3, $meshes->[0]->bb3, 'split populates stats';
     }
     
     my $m2 = Slic3r::TriangleMesh->new;
@@ -80,9 +81,10 @@ my $cube = {
     $m->repair;
     my @z = (2,4,8,6,8,10,12,14,16,18,20);
     my $result = $m->slice(\@z);
+    my $SCALING_FACTOR = 0.000001;
     for my $i (0..$#z) {
         is scalar(@{$result->[$i]}), 1, 'number of returned polygons per layer';
-        is $result->[$i][0]->area, 20*20, 'size of returned polygon';
+        is $result->[$i][0]->area, 20*20/($SCALING_FACTOR**2), 'size of returned polygon';
         ok $result->[$i][0]->is_counter_clockwise, 'orientation of returned polygon';
     }
 }

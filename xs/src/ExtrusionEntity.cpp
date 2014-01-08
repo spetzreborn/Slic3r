@@ -1,6 +1,34 @@
 #include "ExtrusionEntity.hpp"
+#include "ExtrusionEntityCollection.hpp"
+#include "ExPolygonCollection.hpp"
+#include "ClipperUtils.hpp"
 
 namespace Slic3r {
+
+bool
+ExtrusionEntity::is_perimeter() const
+{
+    return this->role == erPerimeter
+        || this->role == erExternalPerimeter
+        || this->role == erOverhangPerimeter
+        || this->role == erContourInternalPerimeter;
+}
+
+bool
+ExtrusionEntity::is_fill() const
+{
+    return this->role == erFill
+        || this->role == erSolidFill
+        || this->role == erTopSolidFill;
+}
+
+bool
+ExtrusionEntity::is_bridge() const
+{
+    return this->role == erBrige
+        || this->role == erInternalBridge
+        || this->role == erOverhangPerimeter;
+}
 
 ExtrusionPath*
 ExtrusionPath::clone() const
@@ -26,6 +54,54 @@ ExtrusionPath::last_point() const
     return new Point(this->polyline.points.back());
 }
 
+ExtrusionEntityCollection*
+ExtrusionPath::intersect_expolygons(ExPolygonCollection* collection) const
+{
+    // perform clipping
+    Polylines clipped;
+    intersection(this->polyline, *collection, clipped);
+    return this->_inflate_collection(clipped);
+}
+
+ExtrusionEntityCollection*
+ExtrusionPath::subtract_expolygons(ExPolygonCollection* collection) const
+{
+    // perform clipping
+    Polylines clipped;
+    diff(this->polyline, *collection, clipped);
+    return this->_inflate_collection(clipped);
+}
+
+void
+ExtrusionPath::clip_end(double distance)
+{
+    this->polyline.clip_end(distance);
+}
+
+void
+ExtrusionPath::simplify(double tolerance)
+{
+    this->polyline.simplify(tolerance);
+}
+
+double
+ExtrusionPath::length() const
+{
+    return this->polyline.length();
+}
+
+ExtrusionEntityCollection*
+ExtrusionPath::_inflate_collection(const Polylines &polylines) const
+{
+    ExtrusionEntityCollection* retval = new ExtrusionEntityCollection();
+    for (Polylines::const_iterator it = polylines.begin(); it != polylines.end(); ++it) {
+        ExtrusionPath* path = this->clone();
+        path->polyline = *it;
+        retval->entities.push_back(path);
+    }
+    return retval;
+}
+
 ExtrusionLoop*
 ExtrusionLoop::clone() const
 {
@@ -40,8 +116,7 @@ ExtrusionLoop::split_at_index(int index) const
     ExtrusionPath* path = new ExtrusionPath();
     path->polyline      = *poly;
     path->role          = this->role;
-    path->height        = this->height;
-    path->flow_spacing  = this->flow_spacing;
+    path->mm3_per_mm    = this->mm3_per_mm;
     
     delete poly;
     return path;

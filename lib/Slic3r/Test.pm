@@ -90,7 +90,7 @@ sub model {
     my $object = $model->add_object;
     $object->add_volume(mesh => $mesh);
     $object->add_instance(
-        offset      => Slic3r::Point->new(0,0),
+        offset      => [0,0],
         rotation    => $params{rotation} // 0,
     );
     return $model;
@@ -99,16 +99,22 @@ sub model {
 sub init_print {
     my ($model_name, %params) = @_;
     
-    my $config = Slic3r::Config->new_from_defaults;
+    my $config = Slic3r::Config->new;
     $config->apply($params{config}) if $params{config};
     $config->set('gcode_comments', 1) if $ENV{SLIC3R_TESTS_GCODE};
     
-    my $print = Slic3r::Print->new(config => $config);
+    my $print = Slic3r::Print->new;
+    $print->apply_config($config);
     
     $model_name = [$model_name] if ref($model_name) ne 'ARRAY';
     for my $model (map model($_, %params), @$model_name) {
-        $model->arrange_objects($config);
-        $print->add_model($model);
+        die "Unknown model in test" if !defined $model;
+        if (defined $params{duplicate} && $params{duplicate} > 1) {
+            $model->duplicate($params{duplicate} // 1, $print->config->min_object_distance);
+        }
+        $model->arrange_objects($print->config->min_object_distance);
+        $model->center_instances_around_point($print->config->print_center);
+        $print->add_model_object($_) for @{$model->objects};
     }
     $print->validate;
     
@@ -119,6 +125,7 @@ sub gcode {
     my ($print) = @_;
     
     my $fh = IO::Scalar->new(\my $gcode);
+    $print->process;
     $print->export_gcode(output_fh => $fh, quiet => 1);
     $fh->close;
     

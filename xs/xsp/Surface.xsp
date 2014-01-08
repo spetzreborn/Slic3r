@@ -3,6 +3,7 @@
 %{
 #include <myinit.h>
 #include "Surface.hpp"
+#include "ClipperUtils.hpp"
 %}
 
 %name{Slic3r::Surface} class Surface {
@@ -14,6 +15,8 @@
     unsigned short thickness_layers()
         %code{% RETVAL = THIS->thickness_layers; %};
     double area();
+    bool is_solid() const;
+    bool is_bridge() const;
 %{
 
 Surface*
@@ -75,6 +78,17 @@ Surface::polygons()
         for (Polygons::iterator it = THIS->expolygon.holes.begin(); it != THIS->expolygon.holes.end(); ++it) {
             RETVAL.push_back((*it));
         }
+    OUTPUT:
+        RETVAL
+
+Surfaces
+Surface::offset(delta, scale = CLIPPER_OFFSET_SCALE, joinType = ClipperLib::jtMiter, miterLimit = 3)
+    const float             delta
+    double                  scale
+    ClipperLib::JoinType    joinType
+    double                  miterLimit
+    CODE:
+        offset(*THIS, RETVAL, delta, scale, joinType, miterLimit);
     OUTPUT:
         RETVAL
 

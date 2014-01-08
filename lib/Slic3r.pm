@@ -7,7 +7,7 @@ use strict;
 use warnings;
 require v5.10;
 
-our $VERSION = "0.9.11-dev";
+our $VERSION = "1.0.1-dev";
 
 our $debug = 0;
 sub debugf {
@@ -33,7 +33,6 @@ our $var = "$FindBin::Bin/var";
 
 use Encode;
 use Encode::Locale;
-use Boost::Geometry::Utils 0.15;
 use Moo 1.003001;
 
 use Slic3r::XS;   # import all symbols (constants etc.) before they get parsed
@@ -57,7 +56,6 @@ use Slic3r::GCode::Reader;
 use Slic3r::GCode::SpiralVase;
 use Slic3r::GCode::VibrationLimit;
 use Slic3r::Geometry qw(PI);
-use Slic3r::Geometry::BoundingBox;
 use Slic3r::Geometry::Clipper;
 use Slic3r::Layer;
 use Slic3r::Layer::Region;
@@ -69,6 +67,7 @@ use Slic3r::Polyline;
 use Slic3r::Print;
 use Slic3r::Print::Object;
 use Slic3r::Print::Region;
+use Slic3r::Print::Simple;
 use Slic3r::Print::SupportMaterial;
 use Slic3r::Surface;
 use Slic3r::TriangleMesh;
@@ -77,21 +76,18 @@ our $build = eval "use Slic3r::Build; 1";
 use constant SCALING_FACTOR         => 0.000001;
 use constant RESOLUTION             => 0.0125;
 use constant SCALED_RESOLUTION      => RESOLUTION / SCALING_FACTOR;
-use constant OVERLAP_FACTOR         => 1;
 use constant SMALL_PERIMETER_LENGTH => (6.5 / SCALING_FACTOR) * 2 * PI;
-use constant LOOP_CLIPPING_LENGTH_OVER_SPACING      => 0.15;
+use constant LOOP_CLIPPING_LENGTH_OVER_NOZZLE_DIAMETER => 0.15;
 use constant INFILL_OVERLAP_OVER_SPACING  => 0.45;
 use constant EXTERNAL_INFILL_MARGIN => 3;
-
-our $Config;
 
 sub parallelize {
     my %params = @_;
     
-    if (!$params{disable} && $Slic3r::have_threads && $Config->threads > 1) {
+    if (!$params{disable} && $Slic3r::have_threads && $params{threads} > 1) {
         my @items = (ref $params{items} eq 'CODE') ? $params{items}->() : @{$params{items}};
         my $q = Thread::Queue->new;
-        $q->enqueue(@items, (map undef, 1..$Config->threads));
+        $q->enqueue(@items, (map undef, 1..$params{threads}));
         
         my $thread_cb = sub {
             $params{thread_cb}->($q);
@@ -112,7 +108,7 @@ sub parallelize {
         $params{collect_cb} ||= sub {};
             
         @_ = ();
-        foreach my $th (map threads->create($thread_cb), 1..$Config->threads) {
+        foreach my $th (map threads->create($thread_cb), 1..$params{threads}) {
             $params{collect_cb}->($th->join);
         }
     } else {
@@ -134,6 +130,11 @@ sub parallelize {
 sub thread_cleanup {
     # prevent destruction of shared objects
     no warnings 'redefine';
+    *Slic3r::Config::DESTROY                = sub {};
+    *Slic3r::Config::Full::DESTROY          = sub {};
+    *Slic3r::Config::Print::DESTROY         = sub {};
+    *Slic3r::Config::PrintObject::DESTROY   = sub {};
+    *Slic3r::Config::PrintRegion::DESTROY   = sub {};
     *Slic3r::ExPolygon::DESTROY             = sub {};
     *Slic3r::ExPolygon::Collection::DESTROY = sub {};
     *Slic3r::ExtrusionLoop::DESTROY         = sub {};
@@ -144,6 +145,7 @@ sub thread_cleanup {
     *Slic3r::Polygon::DESTROY               = sub {};
     *Slic3r::Polyline::DESTROY              = sub {};
     *Slic3r::Polyline::Collection::DESTROY  = sub {};
+    *Slic3r::Print::State::DESTROY          = sub {};
     *Slic3r::Surface::DESTROY               = sub {};
     *Slic3r::Surface::Collection::DESTROY   = sub {};
     *Slic3r::TriangleMesh::DESTROY          = sub {};
@@ -159,5 +161,9 @@ sub open {
     my ($fh, $mode, $filename) = @_;
     return CORE::open $$fh, $mode, encode_path($filename);
 }
+
+# this package declaration prevents an ugly fatal warning to be emitted when
+# spawning a new thread
+package GLUquadricObjPtr;
 
 1;

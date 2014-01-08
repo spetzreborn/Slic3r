@@ -73,7 +73,7 @@ sub flush_path {
         $$buffer =~ s/^/;/mg;
         $gcode = "; these moves were replaced by an arc:\n" . $$buffer;
         
-        my $orientation = Slic3r::Geometry::point_is_on_left_of_segment($cur_path->[2], [ @$cur_path[0,1] ]) ? 'ccw' : 'cw';
+        my $orientation = $cur_path->[2]->ccw(@$cur_path[0,1]) ? 'ccw' : 'cw';
         
         # to find the center, we intersect the perpendicular lines
         # passing by midpoints of $s1 and last segment
@@ -104,7 +104,7 @@ sub flush_path {
         $gcode .= sprintf " I%.3f J%.3f", map { unscale($arc_center->[$_] - $cur_path->[0][$_]) } (X,Y);
         
         my $E = 0;  # TODO: compute E using $length
-        $gcode .= sprintf(" %s%.5f", $self->config->extrusion_axis, $E)
+        $gcode .= sprintf(" %s%.5f", $self->config->get_extrusion_axis, $E)
             if $E;
         
         my $F = 0;  # TODO: extract F from original moves

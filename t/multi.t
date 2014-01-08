@@ -8,9 +8,8 @@ BEGIN {
 }
 
 use List::Util qw(first);
-use Math::ConvexHull::MonotoneChain qw(convex_hull);
 use Slic3r;
-use Slic3r::Geometry qw(scale);
+use Slic3r::Geometry qw(scale convex_hull);
 use Slic3r::Test;
 
 {
@@ -22,6 +21,7 @@ use Slic3r::Test;
     $config->set('extruder_offset', [ [0,0], [20,0], [0,20] ]);
     $config->set('temperature', [200, 180, 170]);
     $config->set('first_layer_temperature', [206, 186, 166]);
+    $config->set('toolchange_gcode', ';toolchange');  # test that it doesn't crash when this is supplied
     
     my $print = Slic3r::Test::init_print('20mm_cube', config => $config);
     
@@ -54,8 +54,8 @@ use Slic3r::Test;
             $point->translate(map scale($_), @{ $config->extruder_offset->[$tool] });
         }
     });
-    my $convex_hull = Slic3r::Polygon->new(@{convex_hull([ map $_->pp, @extrusion_points ])});
-    ok !(first { $convex_hull->encloses_point($_) } @toolchange_points), 'all toolchanges happen outside skirt';
+    my $convex_hull = convex_hull(\@extrusion_points);
+    ok !(first { $convex_hull->contains_point($_) } @toolchange_points), 'all toolchanges happen outside skirt';
 }
 
 __END__

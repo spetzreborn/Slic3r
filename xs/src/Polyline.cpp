@@ -1,6 +1,14 @@
 #include "Polyline.hpp"
+#include "Polygon.hpp"
 
 namespace Slic3r {
+
+Polyline::operator Polylines() const
+{
+    Polylines polylines(1);
+    polylines.push_back(*this);
+    return polylines;
+}
 
 Point*
 Polyline::last_point() const
@@ -77,6 +85,12 @@ Polyline::equally_spaced_points(double distance) const
     }
     
     return pts;
+}
+
+void
+Polyline::simplify(double tolerance)
+{
+    this->points = MultiPoint::_douglas_peucker(this->points, tolerance);
 }
 
 

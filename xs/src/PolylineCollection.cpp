@@ -41,4 +41,16 @@ PolylineCollection::chained_path_from(const Point* start_near, bool no_reverse) 
     return retval;
 }
 
+Point*
+PolylineCollection::leftmost_point() const
+{
+    const Point* p = NULL;
+    for (Polylines::const_iterator it = this->polylines.begin(); it != this->polylines.end(); ++it) {
+        if (p == NULL || it->points.front().x < p->x)
+            p = &(it->points.front());
+    }
+    if (p == NULL) return NULL;
+    return new Point (*p);
+}
+
 }

@@ -9,8 +9,12 @@
 
 namespace Slic3r {
 
+class Polygon;
+typedef std::vector<Polygon> Polygons;
+
 class Polygon : public MultiPoint {
     public:
+    operator Polygons() const;
     Point* last_point() const;
     Lines lines() const;
     Polyline* split_at(const Point* point) const;
@@ -23,14 +27,15 @@ class Polygon : public MultiPoint {
     bool make_counter_clockwise();
     bool make_clockwise();
     bool is_valid() const;
+    bool contains_point(const Point* point) const;
+    Polygons simplify(double tolerance) const;
+    void simplify(double tolerance, Polygons &polygons) const;
     
     #ifdef SLIC3RXS
     SV* to_SV_ref();
     SV* to_SV_clone_ref() const;
     #endif
 };
-
-typedef std::vector<Polygon> Polygons;
 
 }
 

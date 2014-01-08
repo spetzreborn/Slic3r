@@ -4,8 +4,10 @@
 #include <myinit.h>
 #include <admesh/stl.h>
 #include <vector>
+#include "BoundingBox.hpp"
 #include "Point.hpp"
 #include "Polygon.hpp"
+#include "ExPolygon.hpp"
 
 namespace Slic3r {
 
@@ -28,9 +30,13 @@ class TriangleMesh
     void translate(float x, float y, float z);
     void align_to_origin();
     void rotate(double angle, Point* center);
-    std::vector<Polygons>* slice(const std::vector<double> &z);
+    void slice(const std::vector<double> &z, std::vector<Polygons>* layers);
+    void slice(const std::vector<double> &z, std::vector<ExPolygons>* layers);
     TriangleMeshPtrs split() const;
     void merge(const TriangleMesh* mesh);
+    void horizontal_projection(ExPolygons &retval) const;
+    void convex_hull(Polygon* hull);
+    void bounding_box(BoundingBoxf3* bb) const;
     stl_file stl;
     bool repaired;
     
@@ -38,6 +44,9 @@ class TriangleMesh
     SV* to_SV();
     void ReadFromPerl(SV* vertices, SV* facets);
     #endif
+    
+    private:
+    void require_shared_vertices();
 };
 
 enum FacetEdgeType { feNone, feTop, feBottom };
