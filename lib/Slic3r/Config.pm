@@ -3,13 +3,18 @@ use strict;
 use warnings;
 use utf8;
 
-use List::Util qw(first);
+use List::Util qw(first max);
 
 # cemetery of old config settings
 our @Ignore = qw(duplicate_x duplicate_y multiply_x multiply_y support_material_tool acceleration
-    adjust_overhang_flow standby_temperature scale rotate duplicate duplicate_grid);
+    adjust_overhang_flow standby_temperature scale rotate duplicate duplicate_grid
+    rotate scale duplicate_grid start_perimeters_at_concave_points start_perimeters_at_non_overhang
+    randomize_start seal_position bed_size print_center g0);
 
 our $Options = print_config_def();
+
+# overwrite the hard-coded readonly value (this information is not available in XS)
+$Options->{threads}{readonly} = !$Slic3r::have_threads;
 
 # generate accessors
 {
@@ -26,7 +31,8 @@ sub new_from_defaults {
     my $self = $class->new;
     my $defaults = Slic3r::Config::Full->new;
     if (@opt_keys) {
-        $self->set($_, $defaults->get($_)) for @opt_keys;
+        $self->set($_, $defaults->get($_))
+            for grep $defaults->has($_), @opt_keys;
     } else {
         $self->apply_static($defaults);
     }
@@ -54,8 +60,14 @@ sub new_from_cli {
     
     my $self = $class->new;
     foreach my $opt_key (keys %args) {
-        if ($opt_key =~ /^(?:print_center|bed_size|duplicate_grid|extruder_offset|retract_layer_change|wipe)$/) {
+        my $opt_def = $Options->{$opt_key};
+        
+        # we use set_deserialize() for bool options since GetOpt::Long doesn't handle 
+        # arrays of boolean values
+        if ($opt_key =~ /^(?:bed_shape|duplicate_grid|extruder_offset)$/ || $opt_def->{type} eq 'bool') {
             $self->set_deserialize($opt_key, $args{$opt_key});
+        } elsif (my $shortcut = $opt_def->{shortcut}) {
+            $self->set($_, $args{$opt_key}) for @$shortcut;
         } else {
             $self->set($opt_key, $args{$opt_key});
         }
@@ -76,9 +88,16 @@ sub load {
     my ($file) = @_;
     
     my $ini = __PACKAGE__->read_ini($file);
+    return $class->load_ini_hash($ini->{_});
+}
+
+sub load_ini_hash {
+    my $class = shift;
+    my ($ini_hash) = @_;
+    
     my $config = $class->new;
-    foreach my $opt_key (keys %{$ini->{_}}) {
-        ($opt_key, my $value) = _handle_legacy($opt_key, $ini->{_}{$opt_key});
+    foreach my $opt_key (keys %$ini_hash) {
+        ($opt_key, my $value) = _handle_legacy($opt_key, $ini_hash->{$opt_key});
         next if !defined $opt_key;
         $config->set_deserialize($opt_key, $value);
     }
@@ -106,7 +125,6 @@ sub _handle_legacy {
     my ($opt_key, $value) = @_;
     
     # handle legacy options
-    return ($opt_key, $value) if first { $_ eq $opt_key } @Ignore;
     if ($opt_key =~ /^(extrusion_width|bottom_layer_speed|first_layer_height)_ratio$/) {
         $opt_key = $1;
         $opt_key =~ s/^bottom_layer_speed$/first_layer_speed/;
@@ -118,6 +136,21 @@ sub _handle_legacy {
     if ($opt_key eq 'gcode_flavor' && $value eq 'makerbot') {
         $value = 'makerware';
     }
+    if ($opt_key eq 'fill_density' && defined($value) && $value !~ /%/ && $value <= 1) {
+        # fill_density was turned into a percent value
+        $value *= 100;
+        $value = "$value";  # force update of the PV value, workaround for bug https://rt.cpan.org/Ticket/Display.html?id=94110
+    }
+    if ($opt_key eq 'randomize_start' && $value) {
+        $opt_key = 'seam_position';
+        $value = 'random';
+    }
+    if ($opt_key eq 'bed_size' && $value) {
+        $opt_key = 'bed_shape';
+        my ($x, $y) = split /,/, $value;
+        $value = "0x0,${x}x0,${x}x${y},0x${y}";
+    }
+    return () if first { $_ eq $opt_key } @Ignore;
     
     # For historical reasons, the world's full of configs having these very low values;
     # to avoid unexpected behavior we need to ignore them.  Banning these two hard-coded
@@ -142,54 +175,22 @@ sub _handle_legacy {
     return ($opt_key, $value);
 }
 
-sub set_ifndef {
-    my $self = shift;
-    my ($opt_key, $value, $deserialize) = @_;
-    
-    if (!$self->has($opt_key)) {
-        if ($deserialize) {
-            $self->set_deserialize($opt_key, $value);
-        } else {
-            $self->set($opt_key, $value);
-        }
-    }
-}
-
-sub save {
-    my $self = shift;
-    my ($file) = @_;
+sub as_ini {
+    my ($self) = @_;
     
     my $ini = { _ => {} };
     foreach my $opt_key (sort @{$self->get_keys}) {
         next if $Options->{$opt_key}{shortcut};
         $ini->{_}{$opt_key} = $self->serialize($opt_key);
     }
-    __PACKAGE__->write_ini($file, $ini);
+    return $ini;
 }
 
-sub setenv {
+sub save {
     my $self = shift;
+    my ($file) = @_;
     
-    foreach my $opt_key (sort keys %$Options) {
-        $ENV{"SLIC3R_" . uc $opt_key} = $self->serialize($opt_key);
-    }
-}
-
-sub equals {
-    my ($self, $other) = @_;
-    return @{ $self->diff($other) } == 0;
-}
-
-# this will *ignore* options not present in both configs
-sub diff {
-    my ($self, $other) = @_;
-    
-    my @diff = ();
-    foreach my $opt_key (sort @{$self->get_keys}) {
-        push @diff, $opt_key
-            if $other->has($opt_key) && $other->serialize($opt_key) ne $self->serialize($opt_key);
-    }
-    return [@diff];
+    __PACKAGE__->write_ini($file, $self->as_ini);
 }
 
 # this method is idempotent by design and only applies to ::DynamicConfig or ::Full
@@ -210,6 +211,8 @@ sub validate {
     # --first-layer-height
     die "Invalid value for --first-layer-height\n"
         if $self->first_layer_height !~ /^(?:\d*(?:\.\d+)?)%?$/;
+    die "Invalid value for --first-layer-height\n"
+        if $self->get_value('first_layer_height') <= 0;
     
     # --filament-diameter
     die "Invalid value for --filament-diameter\n"
@@ -218,10 +221,6 @@ sub validate {
     # --nozzle-diameter
     die "Invalid value for --nozzle-diameter\n"
         if grep $_ < 0, @{$self->nozzle_diameter};
-    die "--layer-height can't be greater than --nozzle-diameter\n"
-        if grep $self->layer_height > $_, @{$self->nozzle_diameter};
-    die "First layer height can't be greater than --nozzle-diameter\n"
-        if grep $self->get_value('first_layer_height') > $_, @{$self->nozzle_diameter};
     
     # --perimeters
     die "Invalid value for --perimeters\n"
@@ -236,40 +235,28 @@ sub validate {
     die "Invalid value for --gcode-flavor\n"
         if !first { $_ eq $self->gcode_flavor } @{$Options->{gcode_flavor}{values}};
     
-    die "--use-firmware-retraction is only supported by Marlin firmware\n"
-        if $self->use_firmware_retraction && $self->gcode_flavor ne 'reprap';
+    die "--use-firmware-retraction is only supported by Marlin and Machinekit firmware\n"
+        if $self->use_firmware_retraction && $self->gcode_flavor ne 'smoothie' && $self->gcode_flavor ne 'reprap' && $self->gcode_flavor ne 'machinekit';
     
     die "--use-firmware-retraction is not compatible with --wipe\n"
         if $self->use_firmware_retraction && first {$_} @{$self->wipe};
-    
-    # --print-center
-    die "Invalid value for --print-center\n"
-        if !ref $self->print_center 
-            && (!$self->print_center || $self->print_center !~ /^\d+,\d+$/);
     
     # --fill-pattern
     die "Invalid value for --fill-pattern\n"
         if !first { $_ eq $self->fill_pattern } @{$Options->{fill_pattern}{values}};
     
-    # --solid-fill-pattern
-    die "Invalid value for --solid-fill-pattern\n"
-        if !first { $_ eq $self->solid_fill_pattern } @{$Options->{solid_fill_pattern}{values}};
+    # --external-fill-pattern
+    die "Invalid value for --external-fill-pattern\n"
+        if !first { $_ eq $self->external_fill_pattern } @{$Options->{external_fill_pattern}{values}};
     
     # --fill-density
-    die "Invalid value for --fill-density\n"
-        if $self->fill_density < 0 || $self->fill_density > 1;
     die "The selected fill pattern is not supposed to work at 100% density\n"
-        if $self->fill_density == 1
-            && !first { $_ eq $self->fill_pattern } @{$Options->{solid_fill_pattern}{values}};
+        if $self->fill_density == 100
+            && !first { $_ eq $self->fill_pattern } @{$Options->{external_fill_pattern}{values}};
     
     # --infill-every-layers
     die "Invalid value for --infill-every-layers\n"
         if $self->infill_every_layers !~ /^\d+$/ || $self->infill_every_layers < 1;
-    
-    # --bed-size
-    die "Invalid value for --bed-size\n"
-        if !ref $self->bed_size 
-            && (!$self->bed_size || $self->bed_size !~ /^\d+,\d+$/);
     
     # --skirt-height
     die "Invalid value for --skirt-height\n"
@@ -304,7 +291,7 @@ sub validate {
         die "Can't make less than one perimeter when spiral vase mode is enabled\n"
             if $self->perimeters < 1;
         
-        die "Spiral vase mode is not compatible with non-zero fill density\n"
+        die "Spiral vase mode can only print hollow objects, so you need to set Fill density to 0\n"
             if $self->fill_density > 0;
         
         die "Spiral vase mode is not compatible with top solid layers\n"
@@ -312,11 +299,15 @@ sub validate {
         
         die "Spiral vase mode is not compatible with support material\n"
             if $self->support_material || $self->support_material_enforce_layers > 0;
-        
-        # This should be enforce automatically only on spiral layers and
-        # done on the others
-        die "Spiral vase mode is not compatible with retraction on layer change\n"
-            if defined first { $_ } @{ $self->retract_layer_change };
+    }
+    
+    # extrusion widths
+    {
+        my $max_nozzle_diameter = max(@{ $self->nozzle_diameter });
+        die "Invalid extrusion width (too large)\n"
+            if defined first { $_ > 10 * $max_nozzle_diameter }
+                map $self->get_abs_value_over("${_}_extrusion_width", $self->layer_height),
+                qw(perimeter infill solid_infill top_infill support_material first_layer);
     }
     
     # general validation, quick and dirty
@@ -333,10 +324,11 @@ sub validate {
             @values = ($self->$opt_key);
         }
         foreach my $value (@values) {
-            if ($type eq 'i' || $type eq 'f') {
+            if ($type eq 'i' || $type eq 'f' || $opt->{type} eq 'percent') {
+                $value =~ s/%$// if $opt->{type} eq 'percent';
                 die "Invalid value for $opt_key\n"
                     if ($type eq 'i' && $value !~ /^-?\d+$/)
-                    || ($type eq 'f' && $value !~ /^-?(?:\d+|\d*\.\d+)$/)
+                    || (($type eq 'f' || $opt->{type} eq 'percent') && $value !~ /^-?(?:\d+|\d*\.\d+)$/)
                     || (defined $opt->{min} && $value < $opt->{min})
                     || (defined $opt->{max} && $value > $opt->{max});
             } elsif ($type eq 's' && $opt->{type} eq 'select') {
@@ -345,55 +337,8 @@ sub validate {
             }
         }
     }
-}
-
-sub replace_options {
-    my $self = shift;
-    my ($string, $more_variables) = @_;
     
-    $more_variables ||= {};
-    $more_variables->{$_} = $ENV{$_} for grep /^SLIC3R_/, keys %ENV;
-    {
-        my $variables_regex = join '|', keys %$more_variables;
-        $string =~ s/\[($variables_regex)\]/$more_variables->{$1}/eg;
-    }
-    
-    my @lt = localtime; $lt[5] += 1900; $lt[4] += 1;
-    $string =~ s/\[timestamp\]/sprintf '%04d%02d%02d-%02d%02d%02d', @lt[5,4,3,2,1,0]/egx;
-    $string =~ s/\[year\]/$lt[5]/eg;
-    $string =~ s/\[month\]/$lt[4]/eg;
-    $string =~ s/\[day\]/$lt[3]/eg;
-    $string =~ s/\[hour\]/$lt[2]/eg;
-    $string =~ s/\[minute\]/$lt[1]/eg;
-    $string =~ s/\[second\]/$lt[0]/eg;
-    $string =~ s/\[version\]/$Slic3r::VERSION/eg;
-    
-    # build a regexp to match the available options
-    my @options = grep !$Slic3r::Config::Options->{$_}{multiline},
-        grep $self->has($_),
-        keys %{$Slic3r::Config::Options};
-    my $options_regex = join '|', @options;
-    
-    # use that regexp to search and replace option names with option values
-    $string =~ s/\[($options_regex)\]/$self->serialize($1)/eg;
-    foreach my $opt_key (grep ref $self->$_ eq 'ARRAY', @options) {
-        my $value = $self->$opt_key;
-        $string =~ s/\[${opt_key}_${_}\]/$value->[$_]/eg for 0 .. $#$value;
-        if ($Options->{$opt_key}{type} eq 'point') {
-            $string =~ s/\[${opt_key}_X\]/$value->[0]/eg;
-            $string =~ s/\[${opt_key}_Y\]/$value->[1]/eg;
-        }
-    }
-    return $string;
-}
-
-# min object distance is max(duplicate_distance, clearance_radius)
-sub min_object_distance {
-    my $self = shift;
-    
-    return ($self->complete_objects && $self->extruder_clearance_radius > $self->duplicate_distance)
-        ? $self->extruder_clearance_radius
-        : $self->duplicate_distance;
+    return 1;
 }
 
 # CLASS METHODS:
@@ -406,7 +351,8 @@ sub write_ini {
     binmode $fh, ':utf8';
     my $localtime = localtime;
     printf $fh "# generated by Slic3r $Slic3r::VERSION on %s\n", "$localtime";
-    foreach my $category (sort keys %$ini) {
+    # make sure the _ category is the first one written
+    foreach my $category (sort { ($a eq '_') ? -1 : ($a cmp $b) } keys %$ini) {
         printf $fh "\n[%s]\n", $category if $category ne '_';
         foreach my $key (sort keys %{$ini->{$category}}) {
             printf $fh "%s = %s\n", $key, $ini->{$category}{$key};
@@ -420,7 +366,8 @@ sub read_ini {
     my ($file) = @_;
     
     local $/ = "\n";
-    Slic3r::open(\my $fh, '<', $file);
+    Slic3r::open(\my $fh, '<', $file)
+        or die "Unable to open $file: $!\n";
     binmode $fh, ':utf8';
     
     my $ini = { _ => {} };
@@ -430,11 +377,11 @@ sub read_ini {
         next if /^\s+/;
         next if /^$/;
         next if /^\s*#/;
-        if (/^\[(\w+)\]$/) {
+        if (/^\[(.+?)\]$/) {
             $category = $1;
             next;
         }
-        /^(\w+) = (.*)/ or die "Unreadable configuration file (invalid data at line $.)\n";
+        /^(\w+) *= *(.*)/ or die "Unreadable configuration file (invalid data at line $.)\n";
         $ini->{$category}{$1} = $2;
     }
     close $fh;
@@ -442,16 +389,13 @@ sub read_ini {
     return $ini;
 }
 
-package Slic3r::Config::Print;
+package Slic3r::Config::Static;
 use parent 'Slic3r::Config';
 
-package Slic3r::Config::PrintObject;
-use parent 'Slic3r::Config';
-
-package Slic3r::Config::PrintRegion;
-use parent 'Slic3r::Config';
-
-package Slic3r::Config::Full;
-use parent 'Slic3r::Config';
+sub Slic3r::Config::GCode::new { Slic3r::Config::Static::new_GCodeConfig }
+sub Slic3r::Config::Print::new { Slic3r::Config::Static::new_PrintConfig }
+sub Slic3r::Config::PrintObject::new { Slic3r::Config::Static::new_PrintObjectConfig }
+sub Slic3r::Config::PrintRegion::new { Slic3r::Config::Static::new_PrintRegionConfig }
+sub Slic3r::Config::Full::new { Slic3r::Config::Static::new_FullPrintConfig }
 
 1;

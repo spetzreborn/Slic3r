@@ -1,34 +1,46 @@
 %module{Slic3r::XS};
 
 %{
-#include <myinit.h>
-#include "ExtrusionEntityCollection.hpp"
+#include <xsinit.h>
+#include "libslic3r/ExtrusionEntityCollection.hpp"
 %}
 
 %name{Slic3r::ExtrusionPath::Collection} class ExtrusionEntityCollection {
     %name{_new} ExtrusionEntityCollection();
+    ~ExtrusionEntityCollection();
+    Clone<ExtrusionEntityCollection> clone()
+        %code{% RETVAL = THIS->clone(); %};
     void reverse();
     void clear()
         %code{% THIS->entities.clear(); %};
     ExtrusionEntityCollection* chained_path(bool no_reverse)
-        %code{% const char* CLASS = "Slic3r::ExtrusionPath::Collection"; RETVAL = THIS->chained_path(no_reverse); %};
+        %code{%
+            RETVAL = new ExtrusionEntityCollection();
+            THIS->chained_path(RETVAL, no_reverse);
+        %};
     ExtrusionEntityCollection* chained_path_from(Point* start_near, bool no_reverse)
-        %code{% const char* CLASS = "Slic3r::ExtrusionPath::Collection"; RETVAL = THIS->chained_path_from(start_near, no_reverse); %};
-    Point* first_point()
-        %code{% const char* CLASS = "Slic3r::Point"; RETVAL = THIS->first_point(); %};
-    Point* last_point()
-        %code{% const char* CLASS = "Slic3r::Point"; RETVAL = THIS->last_point(); %};
+        %code{%
+            RETVAL = new ExtrusionEntityCollection();
+            THIS->chained_path_from(*start_near, RETVAL, no_reverse);
+        %};
+    Clone<Point> first_point();
+    Clone<Point> last_point();
     int count()
         %code{% RETVAL = THIS->entities.size(); %};
+    int items_count()
+        %code{% RETVAL = THIS->items_count(); %};
+    ExtrusionEntityCollection* flatten()
+        %code{%
+            RETVAL = new ExtrusionEntityCollection();
+            THIS->flatten(RETVAL);
+        %};
+    double min_mm3_per_mm();
+    bool empty()
+        %code{% RETVAL = THIS->entities.empty(); %};
+    std::vector<size_t> orig_indices()
+        %code{% RETVAL = THIS->orig_indices; %};
+    Polygons grow();
 %{
-
-void
-ExtrusionEntityCollection::DESTROY()
-    CODE:
-        for (ExtrusionEntitiesPtr::iterator it = THIS->entities.begin(); it != THIS->entities.end(); ++it) {
-            delete *it;
-        }
-        delete THIS;
 
 SV*
 ExtrusionEntityCollection::arrayref()
@@ -40,11 +52,13 @@ ExtrusionEntityCollection::arrayref()
             SV* sv = newSV(0);
             // return our item by reference
             if (ExtrusionPath* path = dynamic_cast<ExtrusionPath*>(*it)) {
-                sv_setref_pv( sv, "Slic3r::ExtrusionPath::Ref", path );
+                sv_setref_pv( sv, perl_class_name_ref(path), path );
             } else if (ExtrusionLoop* loop = dynamic_cast<ExtrusionLoop*>(*it)) {
-                sv_setref_pv( sv, "Slic3r::ExtrusionLoop::Ref", loop );
+                sv_setref_pv( sv, perl_class_name_ref(loop), loop );
+            } else if (ExtrusionEntityCollection* collection = dynamic_cast<ExtrusionEntityCollection*>(*it)) {
+                sv_setref_pv( sv, perl_class_name_ref(collection), collection );
             } else {
-                sv_setref_pv( sv, "Slic3r::ExtrusionPath::Collection::Ref", *it );
+                croak("Unexpected type in ExtrusionEntityCollection");
             }
             av_store(av, i++, sv);
         }
@@ -56,14 +70,19 @@ void
 ExtrusionEntityCollection::append(...)
     CODE:
         for (unsigned int i = 1; i < items; i++) {
+            if(!sv_isobject( ST(i) ) || (SvTYPE(SvRV( ST(i) )) != SVt_PVMG)) {
+                croak("Argument %d is not object", i);
+            }
             ExtrusionEntity* entity = (ExtrusionEntity *)SvIV((SV*)SvRV( ST(i) ));
             // append COPIES
             if (ExtrusionPath* path = dynamic_cast<ExtrusionPath*>(entity)) {
                 THIS->entities.push_back( new ExtrusionPath(*path) );
             } else if (ExtrusionLoop* loop = dynamic_cast<ExtrusionLoop*>(entity)) {
                 THIS->entities.push_back( new ExtrusionLoop(*loop) );
+            } else if(ExtrusionEntityCollection* collection = dynamic_cast<ExtrusionEntityCollection*>(entity)) {
+                THIS->entities.push_back( collection->clone() );
             } else {
-                THIS->entities.push_back( (*(ExtrusionEntityCollection*)entity).clone() );
+                croak("Argument %d is of unknown type", i);
             }
         }
 
@@ -74,6 +93,14 @@ ExtrusionEntityCollection::no_sort(...)
             THIS->no_sort = SvTRUE(ST(1));
         }
         RETVAL = THIS->no_sort;
+    OUTPUT:
+        RETVAL
+
+ExtrusionEntityCollection*
+ExtrusionEntityCollection::chained_path_indices(bool no_reverse)
+    CODE:
+        RETVAL = new ExtrusionEntityCollection();
+        THIS->chained_path(RETVAL, no_reverse, &RETVAL->orig_indices);
     OUTPUT:
         RETVAL
 

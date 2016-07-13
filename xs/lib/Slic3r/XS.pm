@@ -13,45 +13,45 @@ use overload
     '@{}' => sub { $_[0]->arrayref },
     'fallback' => 1;
 
-package Slic3r::Line::Ref;
-our @ISA = 'Slic3r::Line';
-
-sub DESTROY {}
-
 package Slic3r::Point;
 use overload
     '@{}' => sub { $_[0]->arrayref },
     'fallback' => 1;
 
-package Slic3r::Point::Ref;
-our @ISA = 'Slic3r::Point';
+package Slic3r::Point3;
+use overload
+    '@{}' => sub { [ $_[0]->x, $_[0]->y, $_[0]->z ] },  #,
+    'fallback' => 1;
 
-sub DESTROY {}
+sub pp {
+    my ($self) = @_;
+    return [ @$self ];
+}
+
+package Slic3r::Pointf;
+use overload
+    '@{}' => sub { $_[0]->arrayref },
+    'fallback' => 1;
 
 package Slic3r::Pointf3;
 use overload
     '@{}' => sub { [ $_[0]->x, $_[0]->y, $_[0]->z ] },  #,
     'fallback' => 1;
 
+sub pp {
+    my ($self) = @_;
+    return [ @$self ];
+}
+
 package Slic3r::ExPolygon;
 use overload
     '@{}' => sub { $_[0]->arrayref },
     'fallback' => 1;
 
-package Slic3r::ExPolygon::Ref;
-our @ISA = 'Slic3r::ExPolygon';
-
-sub DESTROY {}
-
 package Slic3r::Polyline;
 use overload
     '@{}' => sub { $_[0]->arrayref },
     'fallback' => 1;
-
-package Slic3r::Polyline::Ref;
-our @ISA = 'Slic3r::Polyline';
-
-sub DESTROY {}
 
 package Slic3r::Polyline::Collection;
 use overload
@@ -62,11 +62,6 @@ package Slic3r::Polygon;
 use overload
     '@{}' => sub { $_[0]->arrayref },
     'fallback' => 1;
-
-package Slic3r::Polygon::Ref;
-our @ISA = 'Slic3r::Polygon';
-
-sub DESTROY {}
 
 package Slic3r::ExPolygon::Collection;
 use overload
@@ -86,40 +81,18 @@ sub new {
     return $self;
 }
 
-package Slic3r::ExtrusionPath::Collection::Ref;
-our @ISA = 'Slic3r::ExtrusionPath::Collection';
-
-sub DESTROY {}
-
 package Slic3r::ExtrusionLoop;
 use overload
     '@{}' => sub { $_[0]->arrayref },
     'fallback' => 1;
 
-sub new {
-    my ($class, %args) = @_;
+sub new_from_paths {
+    my ($class, @paths) = @_;
     
-    return $class->_new(
-        $args{polygon},      # required
-        $args{role},         # required
-        $args{mm3_per_mm}   // -1,
-    );
+    my $loop = $class->new;
+    $loop->append($_) for @paths;
+    return $loop;
 }
-
-sub clone {
-    my ($self, %args) = @_;
-    
-    return (ref $self)->_new(
-        $args{polygon}       // $self->polygon,
-        $args{role}          // $self->role,
-        $args{mm3_per_mm}    // $self->mm3_per_mm,
-    );
-}
-
-package Slic3r::ExtrusionLoop::Ref;
-our @ISA = 'Slic3r::ExtrusionLoop';
-
-sub DESTROY {}
 
 package Slic3r::ExtrusionPath;
 use overload
@@ -132,24 +105,23 @@ sub new {
     return $class->_new(
         $args{polyline},     # required
         $args{role},         # required
-        $args{mm3_per_mm}   // -1,
+        $args{mm3_per_mm}   // die("Missing required mm3_per_mm in ExtrusionPath constructor"),
+        $args{width}        // -1,
+        $args{height}       // -1,
     );
 }
 
 sub clone {
     my ($self, %args) = @_;
     
-    return (ref $self)->_new(
+    return __PACKAGE__->_new(
         $args{polyline}      // $self->polyline,
         $args{role}          // $self->role,
         $args{mm3_per_mm}    // $self->mm3_per_mm,
+        $args{width}         // $self->width,
+        $args{height}        // $self->height,
     );
 }
-
-package Slic3r::ExtrusionPath::Ref;
-our @ISA = 'Slic3r::ExtrusionPath';
-
-sub DESTROY {}
 
 package Slic3r::Flow;
 
@@ -157,7 +129,7 @@ sub new {
     my ($class, %args) = @_;
     
     my $self = $class->_new(
-        @args{qw(width spacing nozzle_diameter)},
+        @args{qw(width height nozzle_diameter)},
     );
     $self->set_bridge($args{bridge} // 0);
     return $self;
@@ -211,14 +183,77 @@ sub clone {
     );
 }
 
-package Slic3r::Surface::Ref;
-our @ISA = 'Slic3r::Surface';
-
-sub DESTROY {}
-
 package Slic3r::Surface::Collection;
 use overload
     '@{}' => sub { $_[0]->arrayref },
     'fallback' => 1;
+
+sub new {
+    my ($class, @surfaces) = @_;
+    
+    my $self = $class->_new;
+    $self->append($_) for @surfaces;
+    return $self;
+}
+
+package Slic3r::GUI::_3DScene::GLVertexArray;
+sub CLONE_SKIP { 1 }
+
+package main;
+for my $class (qw(
+        Slic3r::BridgeDetector
+        Slic3r::Config
+        Slic3r::Config::Full
+        Slic3r::Config::GCode
+        Slic3r::Config::Print
+        Slic3r::Config::PrintObject
+        Slic3r::Config::PrintRegion
+        Slic3r::Config::Static
+        Slic3r::ExPolygon
+        Slic3r::ExPolygon::Collection
+        Slic3r::Extruder
+        Slic3r::ExtrusionLoop
+        Slic3r::ExtrusionPath
+        Slic3r::ExtrusionPath::Collection
+        Slic3r::Flow
+        Slic3r::GCode
+        Slic3r::GCode::AvoidCrossingPerimeters
+        Slic3r::GCode::OozePrevention
+        Slic3r::GCode::PlaceholderParser
+        Slic3r::GCode::Wipe
+        Slic3r::GCode::Writer
+        Slic3r::Geometry::BoundingBox
+        Slic3r::Geometry::BoundingBoxf
+        Slic3r::Geometry::BoundingBoxf3
+        Slic3r::Layer
+        Slic3r::Layer::Region
+        Slic3r::Layer::Support
+        Slic3r::Line
+        Slic3r::Linef3
+        Slic3r::Model
+        Slic3r::Model::Instance
+        Slic3r::Model::Material
+        Slic3r::Model::Object
+        Slic3r::Model::Volume
+        Slic3r::Point
+        Slic3r::Point3
+        Slic3r::Pointf
+        Slic3r::Pointf3
+        Slic3r::Polygon
+        Slic3r::Polyline
+        Slic3r::Polyline::Collection
+        Slic3r::Print
+        Slic3r::Print::Object
+        Slic3r::Print::Region
+        Slic3r::Print::State
+        Slic3r::Surface
+        Slic3r::Surface::Collection
+        Slic3r::TriangleMesh
+    ))
+{
+    no strict 'refs';
+    my $ref_class = $class . "::Ref";
+    eval "package $ref_class; our \@ISA = '$class'; sub DESTROY {};";
+}
 
 1;

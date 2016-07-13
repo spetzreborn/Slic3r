@@ -2,14 +2,11 @@ package Slic3r::ExtrusionLoop;
 use strict;
 use warnings;
 
-sub split_at {
-    my $self = shift;
-    
-    return Slic3r::ExtrusionPath->new(
-        polyline        => $self->polygon->split_at(@_),
-        role            => $self->role,
-        mm3_per_mm      => $self->mm3_per_mm,
-    );
-}
+use parent qw(Exporter);
+
+our @EXPORT_OK = qw(EXTRL_ROLE_DEFAULT
+    EXTRL_ROLE_CONTOUR_INTERNAL_PERIMETER EXTRL_ROLE_SKIRT);
+our %EXPORT_TAGS = (roles => \@EXPORT_OK);
+
 
 1;

@@ -5,14 +5,7 @@ use warnings;
 # a polygon is a closed polyline.
 use parent 'Slic3r::Polyline';
 
-use Slic3r::Geometry qw(
-    polygon_segment_having_point
-    PI X1 X2 Y1 Y2 epsilon);
-
-sub wkt {
-    my $self = shift;
-    return sprintf "POLYGON((%s))", join ',', map "$_->[0] $_->[1]", @$self;
-}
+use Slic3r::Geometry qw(PI);
 
 sub grow {
     my $self = shift;
@@ -37,17 +30,6 @@ sub subdivide {
     }
     pop @new_points;  # remove last point as it coincides with first one
     return Slic3r::Polygon->new(@new_points);
-}
-
-# for cw polygons this will return convex points!
-sub concave_points {
-    my $self = shift;
-    
-    my @points = @$self;
-    my @points_pp = @{$self->pp};
-    return map $points[$_],
-        grep Slic3r::Geometry::angle3points(@points_pp[$_, $_-1, $_+1]) < PI - epsilon,
-        -1 .. ($#points-1);
 }
 
 1;
